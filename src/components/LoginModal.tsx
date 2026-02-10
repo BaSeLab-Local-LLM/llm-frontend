@@ -14,12 +14,11 @@ const Overlay = styled.div`
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: rgba(0, 0, 0, 0.5);
+  background-color: #f0f4f9;
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 2000;
-  backdrop-filter: blur(4px);
 `;
 
 const ModalCard = styled.div`
@@ -122,22 +121,22 @@ export function LoginModal({ isOpen, onLogin }: LoginModalProps) {
         setError('');
         setIsLoading(true);
 
-        // TODO: 백엔드 API 연동 필요 (POST /login)
-        // 현재는 임시 Mock 로직:
-        // admin / admin -> sk-admin-mock-key
-        // user / user -> sk-user-mock-key
-
         try {
-            await new Promise(resolve => setTimeout(resolve, 800)); // Network delay simulation
+            const response = await fetch('/api/v1/auth/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ username, password }),
+            });
 
-            if (username === 'admin' && password === 'admin') {
-                onLogin('sk-admin-mock-key-for-development', username);
-            } else if (username && password) {
-                // 개발 편의를 위해 아무거나 입력해도 키 생성 (나중에 삭제)
-                onLogin(`sk-mock-key-for-${username}`, username);
-            } else {
-                throw new Error('아이디와 비밀번호를 입력해주세요.');
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.detail || '로그인에 실패했습니다.');
             }
+
+            const data = await response.json();
+            onLogin(data.api_key, username);
         } catch (err) {
             setError(err instanceof Error ? err.message : '로그인에 실패했습니다.');
         } finally {
