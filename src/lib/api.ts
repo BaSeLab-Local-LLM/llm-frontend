@@ -3,6 +3,11 @@ export interface Message {
     content: string;
 }
 
+export interface User {
+    username: string;
+    apiKey: string;
+}
+
 export const streamChat = async (
     messages: Message[],
     model: string,

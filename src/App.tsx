@@ -1,9 +1,9 @@
 /** @jsxImportSource @emotion/react */
 import { useState } from 'react';
 import styled from '@emotion/styled';
-import { Settings, Plus, Sparkles } from 'lucide-react';
+import { Plus, Sparkles, LogOut } from 'lucide-react';
 import { ChatInterface } from './components/ChatInterface';
-import { SettingsModal } from './components/SettingsModal';
+import { LoginModal } from './components/LoginModal';
 import { streamChat, type Message } from './lib/api';
 
 const Layout = styled.div`
@@ -65,7 +65,7 @@ const LogoSection = styled.div`
   color: #1a73e8;
 `;
 
-const SettingsBtn = styled.button`
+const LogoutBtn = styled.button`
   margin-top: auto;
   display: flex;
   align-items: center;
@@ -93,14 +93,17 @@ const Header = styled.header`
 function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isLoginOpen, setIsLoginOpen] = useState(false);
 
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('llm_api_key') || '');
-  const [model, setModel] = useState(() => localStorage.getItem('llm_model') || 'local-llm');
+  const [username, setUsername] = useState(() => localStorage.getItem('llm_username') || '');
+
+  // 모델 고정
+  const model = 'local-llm';
 
   const handleSendMessage = async (content: string) => {
     if (!apiKey) {
-      setIsSettingsOpen(true);
+      setIsLoginOpen(true);
       return;
     }
 
@@ -131,6 +134,11 @@ function App() {
       (error) => {
         console.error(error);
         setIsLoading(false);
+        // 인증 오류 시 로그아웃 처리
+        if (error.message.includes('401') || error.message.includes('403')) {
+          handleLogout();
+          setIsLoginOpen(true);
+        }
         setMessages(prev => [
           ...prev,
           { role: 'system', content: `Error: ${error.message}` }
@@ -139,11 +147,23 @@ function App() {
     );
   };
 
-  const handleSaveSettings = (newKey: string, newModel: string) => {
+  const handleLogin = (newKey: string, newUsername: string) => {
     setApiKey(newKey);
-    setModel(newModel);
+    setUsername(newUsername);
     localStorage.setItem('llm_api_key', newKey);
-    localStorage.setItem('llm_model', newModel);
+    localStorage.setItem('llm_username', newUsername);
+    setIsLoginOpen(false);
+  };
+
+  const handleLogout = () => {
+    if (confirm('로그아웃 하시겠습니까?')) {
+      setApiKey('');
+      setUsername('');
+      localStorage.removeItem('llm_api_key');
+      localStorage.removeItem('llm_username');
+      setMessages([]);
+      setIsLoginOpen(true);
+    }
   };
 
   const handleClearChat = () => {
@@ -170,19 +190,26 @@ function App() {
           {/* 채팅 히스토리 */}
         </div>
 
-        <SettingsBtn onClick={() => setIsSettingsOpen(true)}>
-          <Settings size={20} />
-          Settings
-        </SettingsBtn>
+        {apiKey ? (
+          <LogoutBtn onClick={handleLogout}>
+            <LogOut size={20} />
+            {username || '로그아웃'}
+          </LogoutBtn>
+        ) : (
+          <LogoutBtn onClick={() => setIsLoginOpen(true)}>
+            <LogOut size={20} />
+            로그인 필요
+          </LogoutBtn>
+        )}
       </Sidebar>
 
       <MainContent>
         <Header>
           <div style={{ fontWeight: 600, color: '#444746' }}>{model}</div>
           <div className="md:hidden">
-             <button onClick={() => setIsSettingsOpen(true)} style={{background: 'none', border: 'none'}}>
-               <Settings size={20} color="#444746" />
-             </button>
+            <button onClick={() => setIsLoginOpen(true)} style={{ background: 'none', border: 'none' }}>
+              <LogOut size={20} color="#444746" />
+            </button>
           </div>
         </Header>
 
@@ -195,12 +222,9 @@ function App() {
         </main>
       </MainContent>
 
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        onSave={handleSaveSettings}
-        initialApiKey={apiKey}
-        initialModel={model}
+      <LoginModal
+        isOpen={isLoginOpen || !apiKey}
+        onLogin={handleLogin}
       />
     </Layout>
   );
