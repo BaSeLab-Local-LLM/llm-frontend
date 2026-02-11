@@ -3,25 +3,129 @@ export interface Message {
     content: string;
 }
 
-export interface User {
-    username: string;
-    apiKey: string;
+// ─── Auth Error ──────────────────────────────────────────────────────────────
+
+/**
+ * 인증/권한 오류 전용 Error 클래스
+ * 백엔드의 HTTP 상태 코드와 detail 메시지를 함께 전달합니다.
+ */
+export class AuthError extends Error {
+    status: number;
+    detail: string;
+
+    constructor(status: number, detail: string) {
+        super(detail);
+        this.name = 'AuthError';
+        this.status = status;
+        this.detail = detail;
+    }
 }
+
+/** 응답에서 detail 메시지를 추출하고 401/403이면 AuthError를 throw */
+async function throwIfAuthError(response: Response): Promise<void> {
+    if (response.status === 401 || response.status === 403) {
+        let detail = '인증에 실패했습니다.';
+        try {
+            const body = await response.json();
+            if (body.detail) detail = body.detail;
+        } catch {
+            // JSON 파싱 실패 시 기본 메시지 사용
+        }
+        throw new AuthError(response.status, detail);
+    }
+}
+
+// ─── Auth Token helpers ──────────────────────────────────────────────────────
+
+/**
+ * localStorage에는 JWT 토큰만 저장합니다.
+ * role, username 등 민감한 값은 저장하지 않고 항상 서버에서 가져옵니다.
+ * → 공격 표면 최소화: 변조 가능한 값이 JWT 1개뿐
+ */
+const STORAGE_KEY_JWT = 'llm_jwt_token';
+
+export function getStoredJwt(): string {
+    return localStorage.getItem(STORAGE_KEY_JWT) || '';
+}
+
+export function setStoredJwt(jwt: string): void {
+    localStorage.setItem(STORAGE_KEY_JWT, jwt);
+}
+
+export function clearStoredAuth(): void {
+    localStorage.removeItem(STORAGE_KEY_JWT);
+    // 이전 버전 호환: 더 이상 사용하지 않는 키도 정리
+    localStorage.removeItem('llm_api_key');
+    localStorage.removeItem('llm_role');
+    localStorage.removeItem('llm_username');
+    localStorage.removeItem('llm_model');
+}
+
+// ─── JWT Pre-flight 검증 ─────────────────────────────────────────────────────
+
+/**
+ * LLM 프롬프트 전송 전 JWT 토큰 사전 검증.
+ * 변조/만료된 토큰이면 AuthError를 throw합니다.
+ */
+export const verifyToken = async (jwt: string): Promise<void> => {
+    const response = await fetch('/api/v1/auth/verify', {
+        method: 'GET',
+        headers: {
+            'Authorization': `Bearer ${jwt}`,
+        },
+    });
+    await throwIfAuthError(response);
+    if (!response.ok) {
+        throw new Error(`Token verification failed: ${response.status}`);
+    }
+};
+
+// ─── API Fetch Helper ────────────────────────────────────────────────────────
+
+/** JWT 인증이 포함된 fetch wrapper */
+async function apiFetch(url: string, jwt: string, options: RequestInit = {}): Promise<Response> {
+    const response = await fetch(url, {
+        ...options,
+        headers: {
+            'Authorization': `Bearer ${jwt}`,
+            'Content-Type': 'application/json',
+            ...options.headers,
+        },
+    });
+    await throwIfAuthError(response);
+    return response;
+}
+
+// ─── User Info ───────────────────────────────────────────────────────────────
+
+export interface UserInfo {
+    username: string;
+    role: string;
+    is_active: boolean;
+}
+
+export const getUserInfo = async (jwt: string): Promise<UserInfo> => {
+    const res = await apiFetch('/api/v1/auth/me', jwt);
+    if (!res.ok) throw new Error(`Failed to fetch user info: ${res.status}`);
+    return res.json();
+};
+
+// ─── Stream Chat (Backend Proxy) ─────────────────────────────────────────────
 
 export const streamChat = async (
     messages: Message[],
     model: string,
-    apiKey: string,
+    jwt: string,
     onChunk: (chunk: string) => void,
     onFinish: () => void,
     onError: (error: Error) => void
 ) => {
     try {
-        const response = await fetch('/v1/chat/completions', {
+        const response = await fetch('/api/v1/chat/completions', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`
+                'Authorization': `Bearer ${jwt}`
             },
             body: JSON.stringify({
                 model,
@@ -29,6 +133,15 @@ export const streamChat = async (
                 stream: true
             })
         });
+
+        if (response.status === 401 || response.status === 403) {
+            let detail = '인증에 실패했습니다.';
+            try {
+                const body = await response.json();
+                if (body.detail) detail = body.detail;
+            } catch { /* ignore */ }
+            throw new AuthError(response.status, detail);
+        }
 
         if (!response.ok) {
             const errorText = await response.text();
@@ -73,7 +186,8 @@ export const streamChat = async (
         onError(err instanceof Error ? err : new Error('Unknown error'));
     }
 };
-// ... existing code ...
+
+// ─── Conversations ───────────────────────────────────────────────────────────
 
 const API_BASE = '/api/v1/chat';
 
@@ -93,99 +207,97 @@ export interface MessageData {
     created_at: string;
 }
 
-export const listConversations = async (apiKey: string): Promise<Conversation[]> => {
-    const res = await fetch(`${API_BASE}/conversations`, {
-        headers: { 'X-API-Key': apiKey }
-    });
+export const listConversations = async (jwt: string): Promise<Conversation[]> => {
+    const res = await apiFetch(`${API_BASE}/conversations`, jwt);
     if (!res.ok) throw new Error(`Failed to fetch conversations: ${res.status}`);
     return res.json();
 };
 
-export const createConversation = async (apiKey: string, title: string, model: string): Promise<Conversation> => {
-    const res = await fetch(`${API_BASE}/conversations`, {
+export const createConversation = async (jwt: string, title: string, model: string): Promise<Conversation> => {
+    const res = await apiFetch(`${API_BASE}/conversations`, jwt, {
         method: 'POST',
-        headers: {
-            'X-API-Key': apiKey,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ title, model })
+        body: JSON.stringify({ title, model }),
     });
     if (!res.ok) throw new Error(`Failed to create conversation: ${res.status}`);
     return res.json();
 };
 
-export const deleteConversation = async (apiKey: string, conversationId: string): Promise<void> => {
-    const res = await fetch(`${API_BASE}/conversations/${conversationId}`, {
+export const deleteConversation = async (jwt: string, conversationId: string): Promise<void> => {
+    const res = await apiFetch(`${API_BASE}/conversations/${conversationId}`, jwt, {
         method: 'DELETE',
-        headers: { 'X-API-Key': apiKey }
     });
     if (!res.ok) throw new Error(`Failed to delete conversation: ${res.status}`);
 };
 
-export const getMessages = async (apiKey: string, conversationId: string): Promise<MessageData[]> => {
-    const res = await fetch(`${API_BASE}/conversations/${conversationId}/messages`, {
-        headers: { 'X-API-Key': apiKey }
-    });
+export const getMessages = async (jwt: string, conversationId: string): Promise<MessageData[]> => {
+    const res = await apiFetch(`${API_BASE}/conversations/${conversationId}/messages`, jwt);
     if (!res.ok) throw new Error(`Failed to fetch messages: ${res.status}`);
     return res.json();
-}
+};
 
-export const saveMessage = async (apiKey: string, conversationId: string, role: string, content: string): Promise<void> => {
-    const res = await fetch(`${API_BASE}/messages`, {
+export const saveMessage = async (jwt: string, conversationId: string, role: string, content: string): Promise<void> => {
+    const res = await apiFetch(`${API_BASE}/messages`, jwt, {
         method: 'POST',
-        headers: {
-            'X-API-Key': apiKey,
-            'Content-Type': 'application/json'
-        },
         body: JSON.stringify({
             conv_id: conversationId,
             role,
-            content
-        })
+            content,
+        }),
     });
     if (!res.ok) throw new Error(`Failed to save message: ${res.status}`);
 };
 
-// ─── User API ─────────────────────────────────────────────────────────────────
+// ─── Password Change ─────────────────────────────────────────────────────────
 
-const USER_API_BASE = '/api/v1/users';
+export const changePassword = async (
+    jwt: string,
+    currentPassword: string,
+    newPassword: string
+): Promise<{ message: string; access_token?: string }> => {
+    const res = await apiFetch('/api/v1/users/me/change-password', jwt, {
+        method: 'POST',
+        body: JSON.stringify({
+            current_password: currentPassword,
+            new_password: newPassword,
+        }),
+    });
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || '비밀번호 변경에 실패했습니다.');
+    }
+    return res.json();
+};
 
-export interface UserInfo {
+// ─── Admin API ───────────────────────────────────────────────────────────────
+
+export interface AdminUser {
     id: string;
     username: string;
     role: string;
     is_active: boolean;
     daily_token_limit: number | null;
+    token_version: number;
     created_at: string;
 }
 
-export const getUserInfo = async (apiKey: string): Promise<UserInfo> => {
-    const res = await fetch(`${USER_API_BASE}/me`, {
-        headers: { 'X-API-Key': apiKey }
-    });
-    if (!res.ok) throw new Error(`Failed to fetch user info: ${res.status}`);
+export const adminListUsers = async (jwt: string): Promise<AdminUser[]> => {
+    const res = await apiFetch('/api/v1/users/admin/list', jwt);
+    if (!res.ok) throw new Error(`Failed to fetch users: ${res.status}`);
     return res.json();
 };
 
-export const changePassword = async (
-    apiKey: string,
-    currentPassword: string,
-    newPassword: string
-): Promise<{ message: string }> => {
-    const res = await fetch(`${USER_API_BASE}/me/change-password`, {
+export const adminForceLogout = async (jwt: string, userId: string): Promise<{ message: string }> => {
+    const res = await apiFetch(`/api/v1/users/admin/${userId}/force-logout`, jwt, {
         method: 'POST',
-        headers: {
-            'X-API-Key': apiKey,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            current_password: currentPassword,
-            new_password: newPassword
-        })
     });
-    if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.detail || `비밀번호 변경에 실패했습니다.`);
-    }
+    if (!res.ok) throw new Error(`Failed to force logout: ${res.status}`);
+    return res.json();
+};
+
+export const adminToggleActive = async (jwt: string, userId: string): Promise<{ message: string; is_active: boolean }> => {
+    const res = await apiFetch(`/api/v1/users/admin/${userId}/toggle-active`, jwt, {
+        method: 'POST',
+    });
+    if (!res.ok) throw new Error(`Failed to toggle user: ${res.status}`);
     return res.json();
 };

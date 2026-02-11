@@ -5,7 +5,7 @@ import { User, Lock, LogIn } from 'lucide-react';
 
 interface LoginModalProps {
     isOpen: boolean;
-    onLogin: (apiKey: string, username: string) => void;
+    onLogin: (jwt: string, username: string, role: string) => void;
 }
 
 const Overlay = styled.div`
@@ -136,7 +136,8 @@ export function LoginModal({ isOpen, onLogin }: LoginModalProps) {
             }
 
             const data = await response.json();
-            onLogin(data.api_key, username);
+            // JWT 토큰, 사용자명, 역할을 전달
+            onLogin(data.access_token, data.username, data.role);
         } catch (err) {
             setError(err instanceof Error ? err.message : '로그인에 실패했습니다.');
         } finally {

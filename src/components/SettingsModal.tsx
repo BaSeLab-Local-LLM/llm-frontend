@@ -2,13 +2,14 @@
 import { useState, useEffect } from 'react';
 import styled from '@emotion/styled';
 import { X, Eye, EyeOff, User, Lock, Check } from 'lucide-react';
-import { getUserInfo, changePassword, type UserInfo } from '../lib/api';
+import { getUserInfo, changePassword, setStoredJwt, type UserInfo } from '../lib/api';
 
 interface SettingsModalProps {
     isOpen: boolean;
     onClose: () => void;
-    apiKey: string;
+    jwt: string;
     username: string;
+    onJwtUpdate?: (newJwt: string) => void;
 }
 
 const Overlay = styled.div`
@@ -226,7 +227,7 @@ const MatchHint = styled.div<{ matches: boolean }>`
   margin-top: 2px;
 `;
 
-export function SettingsModal({ isOpen, onClose, apiKey, username }: SettingsModalProps) {
+export function SettingsModal({ isOpen, onClose, jwt, username, onJwtUpdate }: SettingsModalProps) {
     const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
     const [currentPw, setCurrentPw] = useState('');
     const [newPw, setNewPw] = useState('');
@@ -238,8 +239,8 @@ export function SettingsModal({ isOpen, onClose, apiKey, username }: SettingsMod
     const [statusMsg, setStatusMsg] = useState<{ text: string; isError: boolean } | null>(null);
 
     useEffect(() => {
-        if (isOpen && apiKey) {
-            getUserInfo(apiKey).then(setUserInfo).catch(console.error);
+        if (isOpen && jwt) {
+            getUserInfo(jwt).then(setUserInfo).catch(console.error);
             // reset form
             setCurrentPw('');
             setNewPw('');
@@ -249,7 +250,7 @@ export function SettingsModal({ isOpen, onClose, apiKey, username }: SettingsMod
             setShowConfirmPw(false);
             setStatusMsg(null);
         }
-    }, [isOpen, apiKey]);
+    }, [isOpen, jwt]);
 
     if (!isOpen) return null;
 
@@ -264,11 +265,17 @@ export function SettingsModal({ isOpen, onClose, apiKey, username }: SettingsMod
         setIsLoading(true);
         setStatusMsg(null);
         try {
-            await changePassword(apiKey, currentPw, newPw);
+            const result = await changePassword(jwt, currentPw, newPw);
             setStatusMsg({ text: '비밀번호가 성공적으로 변경되었습니다.', isError: false });
             setCurrentPw('');
             setNewPw('');
             setConfirmPw('');
+
+            // 새 JWT 토큰으로 갱신 (token_version 증가 반영)
+            if (result.access_token) {
+                setStoredJwt(result.access_token);
+                onJwtUpdate?.(result.access_token);
+            }
         } catch (err) {
             setStatusMsg({
                 text: err instanceof Error ? err.message : '비밀번호 변경에 실패했습니다.',
