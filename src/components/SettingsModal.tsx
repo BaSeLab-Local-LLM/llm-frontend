@@ -255,8 +255,8 @@ export function SettingsModal({ isOpen, onClose, jwt, username, onJwtUpdate }: S
     if (!isOpen) return null;
 
     const passwordsMatch = newPw.length > 0 && newPw === confirmPw;
-    const isNewPwOverLimit = newPw.length > 10;
-    const canSubmit = currentPw.length > 0 && newPw.length > 0 && newPw.length <= 10 && passwordsMatch && !isLoading;
+    const isNewPwOverLimit = newPw.length > 12;
+    const canSubmit = currentPw.length > 0 && newPw.length > 0 && newPw.length <= 12 && passwordsMatch && !isLoading;
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -331,6 +331,7 @@ export function SettingsModal({ isOpen, onClose, jwt, username, onJwtUpdate }: S
                                         placeholder="현재 비밀번호 입력"
                                         value={currentPw}
                                         onChange={e => setCurrentPw(e.target.value)}
+                                        maxLength={12}
                                     />
                                     <ToggleVisibilityBtn type="button" onClick={() => setShowCurrentPw(!showCurrentPw)}>
                                         {showCurrentPw ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -344,16 +345,16 @@ export function SettingsModal({ isOpen, onClose, jwt, username, onJwtUpdate }: S
                                     <IconWrap><Lock size={16} /></IconWrap>
                                     <Input
                                         type={showNewPw ? 'text' : 'password'}
-                                        placeholder="새 비밀번호 (최대 10자)"
+                                        placeholder="새 비밀번호 (최대 12자)"
                                         value={newPw}
-                                        maxLength={10}
+                                        maxLength={12}
                                         onChange={e => setNewPw(e.target.value)}
                                     />
                                     <ToggleVisibilityBtn type="button" onClick={() => setShowNewPw(!showNewPw)}>
                                         {showNewPw ? <EyeOff size={16} /> : <Eye size={16} />}
                                     </ToggleVisibilityBtn>
                                 </InputWrapper>
-                                <CharCount isOver={isNewPwOverLimit}>{newPw.length}/10</CharCount>
+                                <CharCount isOver={isNewPwOverLimit}>{newPw.length}/12</CharCount>
                             </InputGroup>
 
                             <InputGroup>
@@ -364,7 +365,7 @@ export function SettingsModal({ isOpen, onClose, jwt, username, onJwtUpdate }: S
                                         type={showConfirmPw ? 'text' : 'password'}
                                         placeholder="새 비밀번호 다시 입력"
                                         value={confirmPw}
-                                        maxLength={10}
+                                        maxLength={12}
                                         onChange={e => setConfirmPw(e.target.value)}
                                     />
                                     <ToggleVisibilityBtn type="button" onClick={() => setShowConfirmPw(!showConfirmPw)}>

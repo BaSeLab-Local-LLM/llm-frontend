@@ -127,6 +127,7 @@ export function LoginModal({ isOpen, onLogin }: LoginModalProps) {
                 headers: {
                     'Content-Type': 'application/json',
                 },
+                credentials: 'same-origin',  // fingerprint 쿠키 수신/저장
                 body: JSON.stringify({ username, password }),
             });
 
@@ -160,6 +161,8 @@ export function LoginModal({ isOpen, onLogin }: LoginModalProps) {
                                     placeholder="아이디"
                                     value={username}
                                     onChange={e => setUsername(e.target.value)}
+                                    maxLength={12}
+                                    autoComplete="username"
                                 />
                             </InputWrapper>
                         </InputGroup>
@@ -172,6 +175,8 @@ export function LoginModal({ isOpen, onLogin }: LoginModalProps) {
                                     placeholder="비밀번호"
                                     value={password}
                                     onChange={e => setPassword(e.target.value)}
+                                    maxLength={12}
+                                    autoComplete="current-password"
                                 />
                             </InputWrapper>
                         </InputGroup>

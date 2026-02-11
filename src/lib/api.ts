@@ -73,6 +73,7 @@ export const verifyToken = async (jwt: string): Promise<void> => {
         headers: {
             'Authorization': `Bearer ${jwt}`,
         },
+        credentials: 'same-origin',  // fingerprint 쿠키 자동 전송
     });
     await throwIfAuthError(response);
     if (!response.ok) {
@@ -82,7 +83,7 @@ export const verifyToken = async (jwt: string): Promise<void> => {
 
 // ─── API Fetch Helper ────────────────────────────────────────────────────────
 
-/** JWT 인증이 포함된 fetch wrapper */
+/** JWT 인증이 포함된 fetch wrapper (fingerprint 쿠키 자동 전송) */
 async function apiFetch(url: string, jwt: string, options: RequestInit = {}): Promise<Response> {
     const response = await fetch(url, {
         ...options,
@@ -91,6 +92,7 @@ async function apiFetch(url: string, jwt: string, options: RequestInit = {}): Pr
             'Content-Type': 'application/json',
             ...options.headers,
         },
+        credentials: 'same-origin',  // fingerprint 쿠키 자동 전송
     });
     await throwIfAuthError(response);
     return response;
@@ -127,6 +129,7 @@ export const streamChat = async (
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${jwt}`
             },
+            credentials: 'same-origin',  // fingerprint 쿠키 자동 전송
             body: JSON.stringify({
                 model,
                 messages,
@@ -219,6 +222,15 @@ export const createConversation = async (jwt: string, title: string, model: stri
         body: JSON.stringify({ title, model }),
     });
     if (!res.ok) throw new Error(`Failed to create conversation: ${res.status}`);
+    return res.json();
+};
+
+export const renameConversation = async (jwt: string, conversationId: string, title: string): Promise<Conversation> => {
+    const res = await apiFetch(`${API_BASE}/conversations/${conversationId}`, jwt, {
+        method: 'PATCH',
+        body: JSON.stringify({ title }),
+    });
+    if (!res.ok) throw new Error(`Failed to rename conversation: ${res.status}`);
     return res.json();
 };
 

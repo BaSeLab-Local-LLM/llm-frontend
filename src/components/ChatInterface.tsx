@@ -53,21 +53,32 @@ const Avatar = styled.div<{ isUser: boolean }>`
 
 const ContentBox = styled.div<{ isUser: boolean }>`
   max-width: 85%;
+  min-width: 0;
   background: ${props => props.isUser ? '#f0f4f9' : 'transparent'};
   color: #1f1f1f;
   padding: ${props => props.isUser ? '12px 20px' : '0'};
   border-radius: 20px;
   font-size: 16px;
   line-height: 1.6;
+  overflow-wrap: break-word;
+  word-break: break-word;
   
   /* 마크다운 스타일링 */
   .prose {
     color: inherit;
     font-size: 16px;
+    overflow-wrap: break-word;
+    word-break: break-word;
     p { margin: 8px 0; }
     code { background: #f1f3f4; padding: 2px 4px; border-radius: 4px; }
-    pre { background: #1e1f20; color: #fff; padding: 16px; border-radius: 12px; overflow-x: auto; }
+    pre { background: #1e1f20; color: #fff; padding: 16px; border-radius: 12px; overflow-x: auto; word-break: normal; }
   }
+`;
+
+const UserText = styled.div`
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
 `;
 
 const InputArea = styled.div`
@@ -79,9 +90,9 @@ const InputWrapper = styled.form`
   max-width: 800px;
   margin: 0 auto;
   background: #f0f4f9;
-  border-radius: 32px;
+  border-radius: 24px;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   padding: 8px 12px 8px 24px;
   transition: all 0.2s ease;
   box-shadow: 0 1px 2px rgba(0,0,0,0.05);
@@ -93,7 +104,7 @@ const InputWrapper = styled.form`
   }
 `;
 
-const StyledInput = styled.input`
+const StyledTextarea = styled.textarea`
   flex: 1;
   border: none;
   background: transparent;
@@ -101,7 +112,15 @@ const StyledInput = styled.input`
   font-size: 16px;
   color: #1f1f1f;
   outline: none;
+  resize: none;
+  font-family: inherit;
+  line-height: 1.5;
+  max-height: 200px;
+  overflow-y: auto;
   &::placeholder { color: #70757a; }
+
+  &::-webkit-scrollbar { width: 4px; }
+  &::-webkit-scrollbar-thumb { background: #dadce0; border-radius: 2px; }
 `;
 
 const SendButton = styled.button`
@@ -136,6 +155,7 @@ const WelcomeScreen = styled.div`
 export function ChatInterface({ messages, isLoading, onSendMessage }: ChatInterfaceProps) {
     const [input, setInput] = useState('');
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -145,11 +165,35 @@ export function ChatInterface({ messages, isLoading, onSendMessage }: ChatInterf
         scrollToBottom();
     }, [messages]);
 
+    // textarea 높이 자동 조절
+    const adjustTextareaHeight = () => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        textarea.style.height = 'auto';
+        textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px';
+    };
+
+    useEffect(() => {
+        adjustTextareaHeight();
+    }, [input]);
+
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (!input.trim() || isLoading) return;
         onSendMessage(input);
         setInput('');
+        // 전송 후 높이 초기화
+        if (textareaRef.current) {
+            textareaRef.current.style.height = 'auto';
+        }
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        // Enter만 누르면 전송, Shift+Enter는 줄바꿈
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSubmit(e);
+        }
     };
 
     return (
@@ -169,9 +213,13 @@ export function ChatInterface({ messages, isLoading, onSendMessage }: ChatInterf
                             {msg.role === 'user' ? <User size={20} /> : <Sparkles size={20} />}
                         </Avatar>
                         <ContentBox isUser={msg.role === 'user'}>
-                            <div className="prose">
-                                <ReactMarkdown>{msg.content}</ReactMarkdown>
-                            </div>
+                            {msg.role === 'user' ? (
+                                <UserText>{msg.content}</UserText>
+                            ) : (
+                                <div className="prose">
+                                    <ReactMarkdown>{msg.content}</ReactMarkdown>
+                                </div>
+                            )}
                         </ContentBox>
                     </MessageRow>
                 ))}
@@ -187,12 +235,14 @@ export function ChatInterface({ messages, isLoading, onSendMessage }: ChatInterf
 
             <InputArea>
                 <InputWrapper onSubmit={handleSubmit}>
-                    <StyledInput
-                        type="text"
+                    <StyledTextarea
+                        ref={textareaRef}
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
+                        onKeyDown={handleKeyDown}
                         placeholder="여기에 질문을 입력하세요..."
                         disabled={isLoading}
+                        rows={1}
                     />
                     <SendButton type="submit" disabled={!input.trim() || isLoading}>
                         <Send size={20} />

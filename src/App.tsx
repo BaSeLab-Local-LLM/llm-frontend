@@ -1,14 +1,47 @@
 /** @jsxImportSource @emotion/react */
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef, Component, type ErrorInfo, type ReactNode } from 'react';
 import styled from '@emotion/styled';
-import { Plus, Sparkles, LogOut, MessageSquare, Trash2, Settings, ShieldAlert, Shield, Lock } from 'lucide-react';
+import { Plus, Sparkles, LogOut, MessageSquare, Trash2, Settings, ShieldAlert, Shield, Lock, Pencil, Check, X } from 'lucide-react';
+
+// ─── Error Boundary (렌더링 크래시 진단용) ────────────────────────────────────
+class ErrorBoundary extends Component<
+  { children: ReactNode; fallbackLabel?: string },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children: ReactNode; fallbackLabel?: string }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error(`[ErrorBoundary:${this.props.fallbackLabel}]`, error, info.componentStack);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 32, color: '#dc2626', background: '#fef2f2', borderRadius: 12, margin: 20, textAlign: 'center' }}>
+          <h3 style={{ margin: '0 0 8px' }}>렌더링 오류 ({this.props.fallbackLabel})</h3>
+          <pre style={{ fontSize: 13, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+            {this.state.error?.message}
+          </pre>
+          <button onClick={() => this.setState({ hasError: false, error: null })} style={{ marginTop: 12, padding: '8px 20px', borderRadius: 8, border: '1px solid #dc2626', background: '#fff', color: '#dc2626', cursor: 'pointer' }}>
+            다시 시도
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 import { ChatInterface } from './components/ChatInterface';
 import { LoginModal } from './components/LoginModal';
 import { SettingsModal } from './components/SettingsModal';
 import { AdminDashboard } from './components/AdminDashboard';
 import { ConfirmModal } from './components/ConfirmModal';
 import {
-  streamChat, listConversations, createConversation, getMessages, saveMessage, deleteConversation,
+  streamChat, listConversations, createConversation, getMessages, saveMessage, deleteConversation, renameConversation,
   verifyToken, getUserInfo, AuthError,
   getStoredJwt, setStoredJwt, clearStoredAuth,
   type Conversation, type Message
@@ -134,19 +167,35 @@ const ConversationItem = styled.div<{ isActive: boolean }>`
   align-items: center;
   gap: 8px;
   position: relative;
-  .delete-btn { opacity: 0; transition: opacity 0.15s; flex-shrink: 0; }
-  &:hover .delete-btn { opacity: 1; }
+  .action-btns { opacity: 0; transition: opacity 0.15s; flex-shrink: 0; display: flex; gap: 2px; }
+  &:hover .action-btns { opacity: 1; }
 `;
 
-const DeleteButton = styled.button`
+const ConvActionBtn = styled.button<{ variant?: 'danger' | 'confirm' | 'cancel' }>`
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px; height: 28px;
+  width: 26px; height: 26px;
   border: none; border-radius: 6px;
-  background: transparent; cursor: pointer; color: #666; padding: 0;
+  background: transparent; cursor: pointer; padding: 0;
   transition: background 0.15s, color 0.15s;
-  &:hover { background-color: #fce4e4; color: #d93025; }
+  color: ${p => p.variant === 'danger' ? '#666' : p.variant === 'confirm' ? '#16a34a' : p.variant === 'cancel' ? '#666' : '#666'};
+  &:hover {
+    background-color: ${p => p.variant === 'danger' ? '#fce4e4' : p.variant === 'confirm' ? '#dcfce7' : '#f1f3f4'};
+    color: ${p => p.variant === 'danger' ? '#d93025' : p.variant === 'confirm' ? '#16a34a' : '#1f1f1f'};
+  }
+`;
+
+const RenameInput = styled.input`
+  flex: 1;
+  border: 1px solid #1a73e8;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 13px;
+  outline: none;
+  background: #fff;
+  color: #1f1f1f;
+  min-width: 0;
 `;
 
 const Header = styled.header`
@@ -292,6 +341,11 @@ function App() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConvId, setCurrentConvId] = useState<string | null>(null);
 
+  // 대화방 이름 변경 상태
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
   // 보안 경고 메시지
   const [authWarning, setAuthWarning] = useState<string | null>(null);
 
@@ -355,31 +409,36 @@ function App() {
     performLogout();
   };
 
+  // ────────────────────────────────────────────────────────────────────────────
+  // JWT 변조 감지 (모든 사용자 액션에서 호출)
+  //   React 상태의 JWT와 localStorage의 JWT를 비교합니다.
+  //   DevTools 등으로 localStorage를 직접 변조한 경우를 즉시 감지합니다.
+  //   변조 감지 시 경고 모달을 표시하고 false를 반환합니다.
+  // ────────────────────────────────────────────────────────────────────────────
+  const checkJwtIntegrity = useCallback((): boolean => {
+    const storedJwt = getStoredJwt();
+    if (!storedJwt || storedJwt !== jwt) {
+      setAuthWarning('인증 토큰이 변조되었습니다. 보안을 위해 다시 로그인해주세요.');
+      return false;
+    }
+    return true;
+  }, [jwt]);
+
   // ── 메시지 전송 (2단계 검증) ──
   const handleSendMessage = async (content: string) => {
     if (!jwt) return;
 
-    // ────────────────────────────────────────────────────────
     // 1단계: localStorage 변조 감지
-    //   React 상태의 JWT와 localStorage의 JWT를 비교합니다.
-    //   DevTools 등으로 localStorage를 직접 변조한 경우를 즉시 감지합니다.
-    // ────────────────────────────────────────────────────────
-    const storedJwt = getStoredJwt();
-    if (!storedJwt || storedJwt !== jwt) {
-      setAuthWarning('인증 토큰이 변조되었습니다. 보안을 위해 다시 로그인해주세요.');
-      return;
-    }
+    if (!checkJwtIntegrity()) return;
 
-    // ────────────────────────────────────────────────────────
     // 2단계: 서버 사전 검증 (Pre-flight)
     //   토큰 서명, token_version(강제 로그아웃), 계정 상태를 서버에서 검증합니다.
     //   유효하지 않으면 LLM에 프롬프트가 전달되지 않습니다.
-    // ────────────────────────────────────────────────────────
     try {
       await verifyToken(jwt);
     } catch (err) {
       if (handleAuthError(err)) {
-        return; // JWT 만료/강제 로그아웃 → 경고 모달 표시, LLM 전달 차단
+        return;
       }
       setMessages(prev => [
         ...prev,
@@ -474,6 +533,7 @@ function App() {
   };
 
   const handleLogout = () => {
+    if (!checkJwtIntegrity()) return;
     setConfirmState({ type: 'logout' });
   };
 
@@ -484,12 +544,14 @@ function App() {
   };
 
   const handleNewChat = () => {
+    if (!checkJwtIntegrity()) return;
     setMessages([]);
     setCurrentConvId(null);
   };
 
   const handleDeleteConversation = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
+    if (!checkJwtIntegrity()) return;
     setConfirmState({ type: 'deleteConversation', id });
   };
 
@@ -514,7 +576,45 @@ function App() {
     }
   }, [confirmState, jwt, currentConvId]);
 
+  // ── 대화방 이름 변경 ──
+  const startRename = (e: React.MouseEvent, conv: Conversation) => {
+    e.stopPropagation();
+    if (!checkJwtIntegrity()) return;
+    setRenamingId(conv.id);
+    setRenameValue(conv.title || '');
+    setTimeout(() => renameInputRef.current?.focus(), 50);
+  };
+
+  const submitRename = async () => {
+    if (!renamingId || !renameValue.trim()) {
+      setRenamingId(null);
+      return;
+    }
+    try {
+      const updated = await renameConversation(jwt, renamingId, renameValue.trim());
+      setConversations(prev => prev.map(c => c.id === updated.id ? { ...c, title: updated.title } : c));
+    } catch (err) {
+      console.error('Failed to rename conversation', err);
+    }
+    setRenamingId(null);
+  };
+
+  const cancelRename = () => {
+    setRenamingId(null);
+  };
+
+  const handleRenameKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitRename();
+    } else if (e.key === 'Escape') {
+      cancelRename();
+    }
+  };
+
   const handleSelectConversation = async (id: string) => {
+    if (renamingId) return; // 이름 변경 중에는 선택 방지
+    if (!checkJwtIntegrity()) return;
     setCurrentConvId(id);
     try {
       const msgs = await getMessages(jwt, id);
@@ -603,16 +703,39 @@ function App() {
               onClick={() => handleSelectConversation(conv.id)}
             >
               <MessageSquare size={16} color="#666" style={{ flexShrink: 0 }} />
-              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {conv.title || '새 대화'}
-              </span>
-              <DeleteButton
-                className="delete-btn"
-                onClick={(e) => handleDeleteConversation(e, conv.id)}
-                title="대화 삭제"
-              >
-                <Trash2 size={14} />
-              </DeleteButton>
+              {renamingId === conv.id ? (
+                <>
+                  <RenameInput
+                    ref={renameInputRef}
+                    value={renameValue}
+                    onChange={e => setRenameValue(e.target.value)}
+                    onKeyDown={handleRenameKeyDown}
+                    onBlur={submitRename}
+                    onClick={e => e.stopPropagation()}
+                    maxLength={100}
+                  />
+                  <ConvActionBtn variant="confirm" onClick={e => { e.stopPropagation(); submitRename(); }} title="확인">
+                    <Check size={14} />
+                  </ConvActionBtn>
+                  <ConvActionBtn variant="cancel" onClick={e => { e.stopPropagation(); cancelRename(); }} title="취소">
+                    <X size={14} />
+                  </ConvActionBtn>
+                </>
+              ) : (
+                <>
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {conv.title || '새 대화'}
+                  </span>
+                  <div className="action-btns">
+                    <ConvActionBtn onClick={e => startRename(e, conv)} title="이름 변경">
+                      <Pencil size={13} />
+                    </ConvActionBtn>
+                    <ConvActionBtn variant="danger" onClick={e => handleDeleteConversation(e, conv.id)} title="대화 삭제">
+                      <Trash2 size={13} />
+                    </ConvActionBtn>
+                  </div>
+                </>
+              )}
             </ConversationItem>
           ))}
         </div>
@@ -621,11 +744,11 @@ function App() {
           <UserRow>
             <UserName>{username || '사용자'}</UserName>
             {verifiedRole === 'admin' && (
-              <FooterIconBtn onClick={() => setIsAdminOpen(true)} title="관리자 대시보드">
+              <FooterIconBtn onClick={() => { if (checkJwtIntegrity()) setIsAdminOpen(true); }} title="관리자 대시보드">
                 <Shield size={18} />
               </FooterIconBtn>
             )}
-            <FooterIconBtn onClick={() => setIsSettingsOpen(true)} title="설정">
+            <FooterIconBtn onClick={() => { if (checkJwtIntegrity()) setIsSettingsOpen(true); }} title="설정">
               <Settings size={18} />
             </FooterIconBtn>
             <FooterIconBtn onClick={handleLogout} title="로그아웃">
@@ -659,11 +782,13 @@ function App() {
         onJwtUpdate={handleJwtUpdate}
       />
 
-      <AdminDashboard
-        isOpen={isAdminOpen}
-        onClose={() => setIsAdminOpen(false)}
-        jwt={jwt}
-      />
+      <ErrorBoundary fallbackLabel="AdminDashboard">
+        <AdminDashboard
+          isOpen={isAdminOpen}
+          onClose={() => setIsAdminOpen(false)}
+          jwt={jwt}
+        />
+      </ErrorBoundary>
     </Layout>
   );
 }

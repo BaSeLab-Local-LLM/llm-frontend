@@ -101,18 +101,19 @@ const IconBtn = styled.button<{ variant?: 'close' }>`
 const Toolbar = styled.div`
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
   padding: 20px 36px;
   border-bottom: 1px solid #f1f3f4;
   flex-shrink: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow: hidden;
 `;
 
 const SearchWrapper = styled.div`
   position: relative;
-  flex: 1;
-  min-width: 200px;
-  max-width: 420px;
+  flex: 1 1 200px;
+  min-width: 140px;
+  max-width: 320px;
 `;
 
 const SearchIconWrap = styled.div`
@@ -127,6 +128,7 @@ const SearchIconWrap = styled.div`
 
 const SearchInput = styled.input`
   width: 100%;
+  box-sizing: border-box;
   padding: 12px 16px 12px 44px;
   border: 1.5px solid #e8eaed;
   border-radius: 14px;
@@ -152,6 +154,7 @@ const StatChip = styled.div<{ color?: string }>`
   border-radius: 12px;
   font-size: 13px;
   font-weight: 600;
+  flex-shrink: 0;
   background: ${p => p.color === 'blue' ? '#e8f0fe' : p.color === 'red' ? '#fce8e6' : p.color === 'green' ? '#e6f4ea' : '#f8f9fa'};
   color: ${p => p.color === 'blue' ? '#1a73e8' : p.color === 'red' ? '#d93025' : p.color === 'green' ? '#137333' : '#5f6368'};
   white-space: nowrap;
@@ -417,15 +420,26 @@ export function AdminDashboard({ isOpen, onClose, jwt }: AdminDashboardProps) {
         }
     }, [isOpen, jwt]);
 
-    // 검색 필터링
+    // 정렬: admin 먼저, 나머지는 숫자(username) 오름차순
+    const sortedUsers = useMemo(() => {
+        return [...users].sort((a, b) => {
+            // admin 우선
+            if (a.role === 'admin' && b.role !== 'admin') return -1;
+            if (a.role !== 'admin' && b.role === 'admin') return 1;
+            // 숫자 username은 숫자로 비교, 아니면 문자열 비교
+            const numA = Number(a.username);
+            const numB = Number(b.username);
+            if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+            return a.username.localeCompare(b.username, 'ko');
+        });
+    }, [users]);
+
+    // 검색 필터링 (username으로만 검색)
     const filteredUsers = useMemo(() => {
-        if (!searchQuery.trim()) return users;
+        if (!searchQuery.trim()) return sortedUsers;
         const q = searchQuery.toLowerCase().trim();
-        return users.filter(u =>
-            u.username.toLowerCase().includes(q) ||
-            u.role.toLowerCase().includes(q)
-        );
-    }, [users, searchQuery]);
+        return sortedUsers.filter(u => u.username.toLowerCase().includes(q));
+    }, [sortedUsers, searchQuery]);
 
     // 통계
     const stats = useMemo(() => {
@@ -436,15 +450,13 @@ export function AdminDashboard({ isOpen, onClose, jwt }: AdminDashboardProps) {
         return { total, active, inactive, admins };
     }, [users]);
 
-    if (!isOpen) return null;
-
-    const handleForceLogout = (userId: string, username: string) => {
+    const handleForceLogout = useCallback((userId: string, username: string) => {
         setConfirmAction({ type: 'forceLogout', userId, username });
-    };
+    }, []);
 
-    const handleToggleActive = (userId: string, username: string, isActive: boolean) => {
+    const handleToggleActive = useCallback((userId: string, username: string, isActive: boolean) => {
         setConfirmAction({ type: 'toggleActive', userId, username, isActive });
-    };
+    }, []);
 
     const executeConfirmAction = useCallback(async () => {
         if (!confirmAction) return;
@@ -465,6 +477,8 @@ export function AdminDashboard({ isOpen, onClose, jwt }: AdminDashboardProps) {
             setError(err instanceof Error ? err.message : `${label}에 실패했습니다.`);
         }
     }, [confirmAction, jwt]);
+
+    if (!isOpen) return null;
 
     return (
         <Overlay onClick={onClose}>
@@ -500,7 +514,7 @@ export function AdminDashboard({ isOpen, onClose, jwt }: AdminDashboardProps) {
                                 <SearchIconWrap><Search size={18} /></SearchIconWrap>
                                 <SearchInput
                                     type="text"
-                                    placeholder="사용자 검색 (이름, 역할)..."
+                                    placeholder="사용자 ID 검색..."
                                     value={searchQuery}
                                     onChange={e => setSearchQuery(e.target.value)}
                                     autoFocus
