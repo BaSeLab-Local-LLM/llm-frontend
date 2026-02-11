@@ -668,7 +668,7 @@ type ConfirmAction =
 
 type EditState = {
     userId: string;
-    field: 'display_name' | 'class_name';
+    field: 'username' | 'display_name' | 'class_name';
     value: string;
 } | null;
 
@@ -815,7 +815,7 @@ export function AdminDashboard({ isOpen, onClose, jwt }: AdminDashboardProps) {
         return { total, active, inactive, admins, locked };
     }, [users]);
 
-    const startEdit = useCallback((userId: string, field: 'display_name' | 'class_name', currentValue: string | null) => {
+    const startEdit = useCallback((userId: string, field: 'username' | 'display_name' | 'class_name', currentValue: string | null) => {
         setEditState({ userId, field, value: currentValue || '' });
     }, []);
 
@@ -988,19 +988,39 @@ export function AdminDashboard({ isOpen, onClose, jwt }: AdminDashboardProps) {
                                     <tbody>
                                         {filteredUsers.map(user => (
                                             <Tr key={user.id}>
-                                                <Td>
+                                                <EditableTd>
                                                     <UserCell>
                                                         <UserIconWrap isAdmin={user.role === 'admin'}>
                                                             {user.role === 'admin' ? <Shield size={18} /> : <User size={18} />}
                                                         </UserIconWrap>
                                                         <UserInfo>
-                                                            <UserNameText>{user.username}</UserNameText>
+                                                            {editState?.userId === user.id && editState.field === 'username' ? (
+                                                                <CellInput
+                                                                    autoFocus
+                                                                    value={editState.value}
+                                                                    onChange={e => setEditState({ ...editState, value: e.target.value })}
+                                                                    onKeyDown={handleEditKeyDown}
+                                                                    onBlur={submitEdit}
+                                                                    maxLength={32}
+                                                                    placeholder="아이디 입력"
+                                                                    style={{ fontSize: 15, fontWeight: 600 }}
+                                                                />
+                                                            ) : (
+                                                                <EditableCell>
+                                                                    <UserNameText>{user.username}</UserNameText>
+                                                                    {user.role !== 'admin' && (
+                                                                        <CellEditBtn onClick={() => startEdit(user.id, 'username', user.username)} title="아이디 수정">
+                                                                            <Pencil size={12} />
+                                                                        </CellEditBtn>
+                                                                    )}
+                                                                </EditableCell>
+                                                            )}
                                                             <UserSubText>
                                                                 {new Date(user.created_at).toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' })}
                                                             </UserSubText>
                                                         </UserInfo>
                                                     </UserCell>
-                                                </Td>
+                                                </EditableTd>
                                                 <EditableTd>
                                                     {editState?.userId === user.id && editState.field === 'display_name' ? (
                                                         <EditableCell>

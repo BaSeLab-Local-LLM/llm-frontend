@@ -42,9 +42,9 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { ConfirmModal } from './components/ConfirmModal';
 import {
   streamChat, listConversations, createConversation, getMessages, saveMessage, deleteConversation, renameConversation,
-  verifyToken, getUserInfo, AuthError,
+  verifyToken, getUserInfo, AuthError, uploadFile, extractTextContent,
   getStoredJwt, setStoredJwt, clearStoredAuth,
-  type Conversation, type Message
+  type Conversation, type Message, type AttachedFile, type ContentPart
 } from './lib/api';
 
 // ─── Styled Components ───────────────────────────────────────────────────────
@@ -338,6 +338,7 @@ function App() {
   const [verifiedRole, setVerifiedRole] = useState<string>('');
   const [username, setUsername] = useState<string>('');
   const [displayName, setDisplayName] = useState<string>('');
+  const [className, setClassName] = useState<string>('');
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConvId, setCurrentConvId] = useState<string | null>(null);
@@ -374,6 +375,7 @@ function App() {
         setVerifiedRole(info.role);
         setUsername(info.username);
         setDisplayName(info.display_name || '');
+        setClassName(info.class_name || '');
       })
       .catch(err => {
         // 인증 실패 시 경고 없이 조용히 로그아웃 (페이지 로드 시)
@@ -426,8 +428,8 @@ function App() {
     return true;
   }, [jwt]);
 
-  // ── 메시지 전송 (2단계 검증) ──
-  const handleSendMessage = async (content: string) => {
+  // ── 메시지 전송 (2단계 검증 + 멀티모달 지원) ──
+  const handleSendMessage = async (content: string, attachments?: AttachedFile[]) => {
     if (!jwt) return;
 
     // 1단계: localStorage 변조 감지
@@ -451,12 +453,58 @@ function App() {
     }
 
     // ────────────────────────────────────────────────────────
-    // JWT 검증 통과 → 정상 흐름 진행
+    // JWT 검증 통과 → 파일 업로드 + 메시지 구성
     // ────────────────────────────────────────────────────────
-    const newMessage: Message = { role: 'user', content };
+    setIsLoading(true);
+
+    // 첨부파일이 있으면 서버에 업로드하고 멀티모달 content 구성
+    let messageContent: string | ContentPart[] = content;
+    if (attachments && attachments.length > 0) {
+      try {
+        const contentParts: ContentPart[] = [];
+
+        // 파일 업로드 (병렬)
+        const uploadResults = await Promise.all(
+          attachments.map(att => uploadFile(att.file, jwt))
+        );
+
+        // 이미지 → image_url content part
+        // 문서 → text content part (파일명 포함)
+        for (const result of uploadResults) {
+          if (result.type === 'image') {
+            contentParts.push({
+              type: 'image_url',
+              image_url: { url: result.content },
+            });
+          } else {
+            contentParts.push({
+              type: 'text',
+              text: `[문서: ${result.filename}]\n${result.content}`,
+            });
+          }
+        }
+
+        // 사용자 텍스트를 맨 앞에 추가
+        if (content.trim()) {
+          contentParts.unshift({ type: 'text', text: content });
+        }
+
+        messageContent = contentParts;
+      } catch (err) {
+        console.error('File upload failed:', err);
+        setIsLoading(false);
+        if (handleAuthError(err)) return;
+        setMessages(prev => [
+          ...prev,
+          { role: 'system', content: `파일 업로드 실패: ${err instanceof Error ? err.message : '알 수 없는 오류'}` }
+        ]);
+        return;
+      }
+    }
+
+    const newMessage: Message = { role: 'user', content: messageContent };
     const updatedMessages = [...messages, newMessage];
     setMessages(updatedMessages);
-    setIsLoading(true);
 
     let assistantMessage = '';
     setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
@@ -464,7 +512,8 @@ function App() {
     let convId = currentConvId;
     if (!convId) {
       try {
-        const title = content.length > 20 ? content.slice(0, 20) + '...' : content;
+        const titleSource = typeof messageContent === 'string' ? messageContent : content || '파일 첨부 대화';
+        const title = titleSource.length > 20 ? titleSource.slice(0, 20) + '...' : titleSource;
         const newConv = await createConversation(jwt, title, model);
         setConversations(prev => [newConv, ...prev]);
         setCurrentConvId(newConv.id);
@@ -477,7 +526,9 @@ function App() {
       }
     }
 
-    saveMessage(jwt, convId, 'user', content).catch(console.error);
+    // DB에는 텍스트만 저장 (이미지 base64 제외)
+    const textForDb = extractTextContent(messageContent);
+    saveMessage(jwt, convId, 'user', textForDb).catch(console.error);
 
     await streamChat(
       updatedMessages,
@@ -528,6 +579,7 @@ function App() {
     setJwt('');
     setUsername('');
     setDisplayName('');
+    setClassName('');
     setVerifiedRole('');
     clearStoredAuth();
     setMessages([]);
@@ -538,12 +590,6 @@ function App() {
   const handleLogout = () => {
     if (!checkJwtIntegrity()) return;
     setConfirmState({ type: 'logout' });
-  };
-
-  // ── JWT 갱신 (비밀번호 변경 시) ──
-  const handleJwtUpdate = (newJwt: string) => {
-    setJwt(newJwt);
-    setStoredJwt(newJwt);
   };
 
   const handleNewChat = () => {
@@ -745,7 +791,17 @@ function App() {
 
         <SidebarFooter>
           <UserRow>
-            <UserName>{displayName || username || '사용자'}</UserName>
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+              <UserName>
+                {username || '사용자'}
+                {displayName ? ` (${displayName})` : ''}
+              </UserName>
+              {className && (
+                <span style={{ fontSize: 11, color: '#9aa0a6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {className}
+                </span>
+              )}
+            </div>
             {verifiedRole === 'admin' && (
               <FooterIconBtn onClick={() => { if (checkJwtIntegrity()) setIsAdminOpen(true); }} title="관리자 대시보드">
                 <Shield size={18} />
@@ -782,7 +838,7 @@ function App() {
         onClose={() => setIsSettingsOpen(false)}
         jwt={jwt}
         username={username}
-        onJwtUpdate={handleJwtUpdate}
+        onLogout={performLogout}
       />
 
       <ErrorBoundary fallbackLabel="AdminDashboard">

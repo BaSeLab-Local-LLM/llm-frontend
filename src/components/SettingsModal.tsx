@@ -2,14 +2,14 @@
 import { useState, useEffect } from 'react';
 import styled from '@emotion/styled';
 import { X, Eye, EyeOff, User, Lock, Check } from 'lucide-react';
-import { getUserInfo, changePassword, setStoredJwt, type UserInfo } from '../lib/api';
+import { getUserInfo, changePassword, type UserInfo } from '../lib/api';
 
 interface SettingsModalProps {
     isOpen: boolean;
     onClose: () => void;
     jwt: string;
     username: string;
-    onJwtUpdate?: (newJwt: string) => void;
+    onLogout?: () => void;
 }
 
 const Overlay = styled.div`
@@ -227,7 +227,7 @@ const MatchHint = styled.div<{ matches: boolean }>`
   margin-top: 2px;
 `;
 
-export function SettingsModal({ isOpen, onClose, jwt, username, onJwtUpdate }: SettingsModalProps) {
+export function SettingsModal({ isOpen, onClose, jwt, username, onLogout }: SettingsModalProps) {
     const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
     const [currentPw, setCurrentPw] = useState('');
     const [newPw, setNewPw] = useState('');
@@ -265,17 +265,16 @@ export function SettingsModal({ isOpen, onClose, jwt, username, onJwtUpdate }: S
         setIsLoading(true);
         setStatusMsg(null);
         try {
-            const result = await changePassword(jwt, currentPw, newPw);
-            setStatusMsg({ text: '비밀번호가 성공적으로 변경되었습니다.', isError: false });
+            await changePassword(jwt, currentPw, newPw);
+            setStatusMsg({ text: '비밀번호가 변경되었습니다. 잠시 후 로그아웃됩니다.', isError: false });
             setCurrentPw('');
             setNewPw('');
             setConfirmPw('');
 
-            // 새 JWT 토큰으로 갱신 (token_version 증가 반영)
-            if (result.access_token) {
-                setStoredJwt(result.access_token);
-                onJwtUpdate?.(result.access_token);
-            }
+            // 모든 기기 로그아웃 — 2초 후 현재 기기도 로그아웃
+            setTimeout(() => {
+                onLogout?.();
+            }, 2000);
         } catch (err) {
             setStatusMsg({
                 text: err instanceof Error ? err.message : '비밀번호 변경에 실패했습니다.',

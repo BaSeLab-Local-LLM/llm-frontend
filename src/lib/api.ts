@@ -1,6 +1,93 @@
+// ─── 멀티모달 Content Parts (OpenAI 호환) ────────────────────────────────────
+
+export interface TextContentPart {
+    type: 'text';
+    text: string;
+}
+
+export interface ImageUrlDetail {
+    url: string;
+}
+
+export interface ImageContentPart {
+    type: 'image_url';
+    image_url: ImageUrlDetail;
+}
+
+export type ContentPart = TextContentPart | ImageContentPart;
+
 export interface Message {
     role: 'user' | 'assistant' | 'system';
+    content: string | ContentPart[];
+}
+
+// ─── 첨부파일 타입 ──────────────────────────────────────────────────────────
+
+export interface AttachedFile {
+    file: File;
+    preview?: string;  // 이미지 썸네일 URL (object URL)
+    type: 'image' | 'document';
+    status: 'pending' | 'uploading' | 'done' | 'error';
+    /** 업로드 완료 후 서버 응답 */
+    result?: FileUploadResult;
+}
+
+export interface FileUploadResult {
+    type: 'image' | 'document';
     content: string;
+    filename: string;
+    mime_type: string;
+}
+
+// ─── 파일 업로드 API ────────────────────────────────────────────────────────
+
+export const uploadFile = async (
+    file: File,
+    jwt: string,
+): Promise<FileUploadResult> => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch('/api/v1/files/upload', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${jwt}`,
+        },
+        credentials: 'same-origin',
+        body: formData,
+    });
+
+    if (response.status === 401 || response.status === 403) {
+        let detail = '인증에 실패했습니다.';
+        try {
+            const body = await response.json();
+            if (body.detail) detail = body.detail;
+        } catch { /* ignore */ }
+        throw new AuthError(response.status, detail);
+    }
+
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `파일 업로드 실패: ${response.status}`);
+    }
+
+    return response.json();
+};
+
+/**
+ * 멀티모달 메시지의 content에서 텍스트만 추출 (DB 저장용)
+ * 이미지는 [이미지: filename] 플레이스홀더로 대체
+ */
+export function extractTextContent(content: string | ContentPart[]): string {
+    if (typeof content === 'string') return content;
+    return content
+        .map(part => {
+            if (part.type === 'text') return part.text;
+            if (part.type === 'image_url') return '[이미지 첨부]';
+            return '';
+        })
+        .filter(Boolean)
+        .join('\n');
 }
 
 // ─── Auth Error ──────────────────────────────────────────────────────────────
@@ -135,7 +222,9 @@ export const streamChat = async (
             body: JSON.stringify({
                 model,
                 messages,
-                stream: true
+                stream: true,
+                temperature: 0.7,
+                top_p: 0.8
             })
         });
 
@@ -267,7 +356,7 @@ export const changePassword = async (
     jwt: string,
     currentPassword: string,
     newPassword: string
-): Promise<{ message: string; access_token?: string }> => {
+): Promise<{ message: string; require_relogin?: boolean }> => {
     const res = await apiFetch('/api/v1/users/me/change-password', jwt, {
         method: 'POST',
         body: JSON.stringify({
@@ -322,13 +411,16 @@ export const adminToggleActive = async (jwt: string, userId: string): Promise<{ 
 export const adminUpdateUser = async (
     jwt: string,
     userId: string,
-    data: { display_name?: string; class_name?: string }
+    data: { username?: string; display_name?: string; class_name?: string }
 ): Promise<AdminUser> => {
     const res = await apiFetch(`/api/v1/users/admin/${userId}`, jwt, {
         method: 'PATCH',
         body: JSON.stringify(data),
     });
-    if (!res.ok) throw new Error(`Failed to update user: ${res.status}`);
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || `Failed to update user: ${res.status}`);
+    }
     return res.json();
 };
 

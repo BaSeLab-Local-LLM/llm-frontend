@@ -1,16 +1,16 @@
 /** @jsxImportSource @emotion/react */
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import styled from '@emotion/styled';
-import { Send, User, Loader2, Sparkles, Copy, Check } from 'lucide-react';
+import { Send, User, Loader2, Sparkles, Copy, Check, Paperclip, X, FileText } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import type { Message } from '../lib/api';
+import type { Message, AttachedFile, ContentPart } from '../lib/api';
 
 interface ChatInterfaceProps {
     messages: Message[];
     isLoading: boolean;
-    onSendMessage: (content: string) => void;
+    onSendMessage: (content: string, attachments?: AttachedFile[]) => void;
 }
 
 
@@ -232,6 +232,104 @@ const CopyButton = styled.button`
   &:hover { background: rgba(255,255,255,0.1); color: #fff; }
 `;
 
+const AttachButton = styled.button`
+  background: transparent;
+  border: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #70757a;
+  transition: all 0.15s;
+  flex-shrink: 0;
+  &:hover { background: rgba(0,0,0,0.05); color: #1a73e8; }
+  &:disabled { opacity: 0.4; cursor: not-allowed; }
+`;
+
+const AttachmentPreviewArea = styled.div`
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px 4px 24px;
+  max-width: 800px;
+  margin: 0 auto;
+  overflow-x: auto;
+  flex-wrap: wrap;
+`;
+
+const AttachmentChip = styled.div`
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: #e8eef7;
+  border-radius: 12px;
+  font-size: 13px;
+  color: #1f1f1f;
+  max-width: 200px;
+`;
+
+const AttachmentThumb = styled.img`
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  object-fit: cover;
+`;
+
+const RemoveAttachButton = styled.button`
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #dc2626;
+  color: white;
+  border: 2px solid white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  &:hover { background: #b91c1c; }
+`;
+
+const DragOverlay = styled.div`
+  position: absolute;
+  inset: 0;
+  background: rgba(26, 115, 232, 0.08);
+  border: 3px dashed #1a73e8;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  pointer-events: none;
+  font-size: 18px;
+  color: #1a73e8;
+  font-weight: 500;
+`;
+
+const MessageImageContainer = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+`;
+
+const MessageImage = styled.img`
+  max-width: 300px;
+  max-height: 300px;
+  border-radius: 12px;
+  object-fit: contain;
+  cursor: pointer;
+  transition: transform 0.15s;
+  &:hover { transform: scale(1.02); }
+`;
+
 const WelcomeScreen = styled.div`
   display: flex;
   flex-direction: column;
@@ -260,10 +358,145 @@ function CopyCodeButton({ code }: { code: string }) {
     );
 }
 
+// ─── 허용 파일 타입 ──────────────────────────────────────────────────────────
+const ACCEPT_FILE_TYPES = [
+    'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp',
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'text/csv', 'text/plain',
+].join(',');
+
+function isImageType(mime: string) {
+    return mime.startsWith('image/');
+}
+
+// ─── 멀티모달 메시지 content 렌더링 헬퍼 ────────────────────────────────────
+
+function renderMultimodalContent(content: string | ContentPart[]) {
+    if (typeof content === 'string') {
+        return <UserText>{content}</UserText>;
+    }
+    return (
+        <div>
+            {content.map((part, i) => {
+                if (part.type === 'text') {
+                    return <UserText key={i}>{part.text}</UserText>;
+                }
+                if (part.type === 'image_url') {
+                    return (
+                        <MessageImageContainer key={i}>
+                            <MessageImage
+                                src={part.image_url.url}
+                                alt="첨부 이미지"
+                                onClick={() => window.open(part.image_url.url, '_blank')}
+                            />
+                        </MessageImageContainer>
+                    );
+                }
+                return null;
+            })}
+        </div>
+    );
+}
+
+function getTextFromContent(content: string | ContentPart[]): string {
+    if (typeof content === 'string') return content;
+    return content
+        .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+        .map(p => p.text)
+        .join('\n');
+}
+
+// ─── 마크다운 렌더링 컴포넌트 ────────────────────────────────────────────────
+
+const markdownComponents = {
+    // 코드 블록: 구문 강조 + 복사 버튼
+    code: ({ className, children, ...props }: { className?: string; children?: React.ReactNode;[key: string]: any }) => {
+        const match = /language-(\w+)/.exec(className || '');
+        const codeString = String(children).replace(/\n$/, '');
+
+        // 코드 블록 (```으로 감싼 경우)
+        if (match) {
+            return (
+                <CodeBlockWrapper>
+                    <CodeBlockHeader>
+                        <CodeLanguage>{match[1]}</CodeLanguage>
+                        <CopyCodeButton code={codeString} />
+                    </CodeBlockHeader>
+                    <SyntaxHighlighter
+                        style={oneDark}
+                        language={match[1]}
+                        PreTag="div"
+                        customStyle={{
+                            margin: 0,
+                            borderRadius: 0,
+                            padding: '16px',
+                            fontSize: '14px',
+                            lineHeight: '1.6',
+                        }}
+                    >
+                        {codeString}
+                    </SyntaxHighlighter>
+                </CodeBlockWrapper>
+            );
+        }
+
+        // 언어 지정 없는 코드 블록도 처리
+        if (codeString.includes('\n')) {
+            return (
+                <CodeBlockWrapper>
+                    <CodeBlockHeader>
+                        <CodeLanguage>code</CodeLanguage>
+                        <CopyCodeButton code={codeString} />
+                    </CodeBlockHeader>
+                    <SyntaxHighlighter
+                        style={oneDark}
+                        language="text"
+                        PreTag="div"
+                        customStyle={{
+                            margin: 0,
+                            borderRadius: 0,
+                            padding: '16px',
+                            fontSize: '14px',
+                            lineHeight: '1.6',
+                        }}
+                    >
+                        {codeString}
+                    </SyntaxHighlighter>
+                </CodeBlockWrapper>
+            );
+        }
+
+        // 인라인 코드
+        return <code className={className} {...props}>{children}</code>;
+    },
+    // 링크: javascript: 프로토콜 차단, 외부 링크는 새 탭에서 열기
+    a: ({ href, children, ...props }: { href?: string; children?: React.ReactNode;[key: string]: any }) => {
+        const safeHref = href && (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('/') || href.startsWith('#'))
+            ? href
+            : undefined;
+        if (!safeHref) return <span>{children}</span>;
+        return <a href={safeHref} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
+    },
+    // 이미지: data: URI도 허용 (첨부 이미지 지원)
+    img: ({ src, alt, ...props }: { src?: string; alt?: string;[key: string]: any }) => {
+        const safeSrc = src && (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('/') || src.startsWith('data:'))
+            ? src
+            : undefined;
+        if (!safeSrc) return <span>[이미지: {alt}]</span>;
+        return <img src={safeSrc} alt={alt || ''} style={{ maxWidth: '100%', borderRadius: '8px' }} {...props} />;
+    },
+};
+
 export function ChatInterface({ messages, isLoading, onSendMessage }: ChatInterfaceProps) {
     const [input, setInput] = useState('');
+    const [attachments, setAttachments] = useState<AttachedFile[]>([]);
+    const [isDragging, setIsDragging] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const dragCounter = useRef(0);
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -285,33 +518,111 @@ export function ChatInterface({ messages, isLoading, onSendMessage }: ChatInterf
         adjustTextareaHeight();
     }, [input]);
 
+    // ─── 파일 추가 ──────────────────────────────────────────────────────────
+    const addFiles = useCallback((files: FileList | File[]) => {
+        const newAttachments: AttachedFile[] = Array.from(files).map(file => {
+            const isImage = isImageType(file.type);
+            return {
+                file,
+                preview: isImage ? URL.createObjectURL(file) : undefined,
+                type: isImage ? 'image' : 'document',
+                status: 'pending' as const,
+            };
+        });
+        setAttachments(prev => [...prev, ...newAttachments]);
+    }, []);
+
+    const removeAttachment = useCallback((index: number) => {
+        setAttachments(prev => {
+            const removed = prev[index];
+            if (removed?.preview) URL.revokeObjectURL(removed.preview);
+            return prev.filter((_, i) => i !== index);
+        });
+    }, []);
+
+    // ─── 드래그 앤 드롭 ─────────────────────────────────────────────────────
+    const handleDragEnter = useCallback((e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounter.current++;
+        if (e.dataTransfer.types.includes('Files')) {
+            setIsDragging(true);
+        }
+    }, []);
+
+    const handleDragLeave = useCallback((e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounter.current--;
+        if (dragCounter.current === 0) {
+            setIsDragging(false);
+        }
+    }, []);
+
+    const handleDragOver = useCallback((e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+    }, []);
+
+    const handleDrop = useCallback((e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounter.current = 0;
+        setIsDragging(false);
+        if (e.dataTransfer.files.length > 0) {
+            addFiles(e.dataTransfer.files);
+        }
+    }, [addFiles]);
+
+    // ─── 전송 ───────────────────────────────────────────────────────────────
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
-        if (!input.trim() || isLoading) return;
-        onSendMessage(input);
+        const hasContent = input.trim() || attachments.length > 0;
+        if (!hasContent || isLoading) return;
+        onSendMessage(input, attachments.length > 0 ? attachments : undefined);
         setInput('');
-        // 전송 후 높이 초기화
+        setAttachments([]);
         if (textareaRef.current) {
             textareaRef.current.style.height = 'auto';
         }
     };
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-        // Enter만 누르면 전송, Shift+Enter는 줄바꿈
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             handleSubmit(e);
         }
     };
 
+    // cleanup object URLs
+    useEffect(() => {
+        return () => {
+            attachments.forEach(a => { if (a.preview) URL.revokeObjectURL(a.preview); });
+        };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     return (
-        <Container>
+        <Container
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+            style={{ position: 'relative' }}
+        >
+            {isDragging && (
+                <DragOverlay>파일을 여기에 놓으세요</DragOverlay>
+            )}
+
             <MessageList>
                 {messages.length === 0 && (
                     <WelcomeScreen>
                         <Sparkles size={48} color="#1a73e8" style={{ marginBottom: '24px' }} />
                         <h2>BaSE Lab LLM에 무엇이든 물어보세요</h2>
                         <p>코딩, 연구, 데이터 분석까지 연구실 전용 AI가 도와드립니다.</p>
+                        <p style={{ fontSize: '13px', color: '#9aa0a6', marginTop: '8px' }}>
+                            이미지와 문서를 첨부하여 질문할 수도 있습니다.
+                        </p>
                     </WelcomeScreen>
                 )}
 
@@ -322,90 +633,11 @@ export function ChatInterface({ messages, isLoading, onSendMessage }: ChatInterf
                         </Avatar>
                         <ContentBox isUser={msg.role === 'user'}>
                             {msg.role === 'user' ? (
-                                <UserText>{msg.content}</UserText>
+                                renderMultimodalContent(msg.content)
                             ) : (
                                 <div className="prose">
-                                    <ReactMarkdown
-                                        components={{
-                                            // 코드 블록: 구문 강조 + 복사 버튼
-                                            code: ({ className, children, ...props }: { className?: string; children?: React.ReactNode;[key: string]: any }) => {
-                                                const match = /language-(\w+)/.exec(className || '');
-                                                const codeString = String(children).replace(/\n$/, '');
-                                                
-                                                // 코드 블록 (```으로 감싼 경우)
-                                                if (match) {
-                                                    return (
-                                                        <CodeBlockWrapper>
-                                                            <CodeBlockHeader>
-                                                                <CodeLanguage>{match[1]}</CodeLanguage>
-                                                                <CopyCodeButton code={codeString} />
-                                                            </CodeBlockHeader>
-                                                            <SyntaxHighlighter
-                                                                style={oneDark}
-                                                                language={match[1]}
-                                                                PreTag="div"
-                                                                customStyle={{
-                                                                    margin: 0,
-                                                                    borderRadius: 0,
-                                                                    padding: '16px',
-                                                                    fontSize: '14px',
-                                                                    lineHeight: '1.6',
-                                                                }}
-                                                            >
-                                                                {codeString}
-                                                            </SyntaxHighlighter>
-                                                        </CodeBlockWrapper>
-                                                    );
-                                                }
-                                                
-                                                // 언어 지정 없는 코드 블록도 처리
-                                                if (codeString.includes('\n')) {
-                                                    return (
-                                                        <CodeBlockWrapper>
-                                                            <CodeBlockHeader>
-                                                                <CodeLanguage>code</CodeLanguage>
-                                                                <CopyCodeButton code={codeString} />
-                                                            </CodeBlockHeader>
-                                                            <SyntaxHighlighter
-                                                                style={oneDark}
-                                                                language="text"
-                                                                PreTag="div"
-                                                                customStyle={{
-                                                                    margin: 0,
-                                                                    borderRadius: 0,
-                                                                    padding: '16px',
-                                                                    fontSize: '14px',
-                                                                    lineHeight: '1.6',
-                                                                }}
-                                                            >
-                                                                {codeString}
-                                                            </SyntaxHighlighter>
-                                                        </CodeBlockWrapper>
-                                                    );
-                                                }
-                                                
-                                                // 인라인 코드
-                                                return <code className={className} {...props}>{children}</code>;
-                                            },
-                                            // 링크: javascript: 프로토콜 차단, 외부 링크는 새 탭에서 열기
-                                            a: ({ href, children, ...props }: { href?: string; children?: React.ReactNode;[key: string]: any }) => {
-                                                const safeHref = href && (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('/') || href.startsWith('#'))
-                                                    ? href
-                                                    : undefined;
-                                                if (!safeHref) return <span>{children}</span>;
-                                                return <a href={safeHref} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
-                                            },
-                                            // 이미지: 외부 이미지 로드 제한
-                                            img: ({ src, alt, ...props }: { src?: string; alt?: string;[key: string]: any }) => {
-                                                const safeSrc = src && (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('/'))
-                                                    ? src
-                                                    : undefined;
-                                                if (!safeSrc) return <span>[이미지: {alt}]</span>;
-                                                return <img src={safeSrc} alt={alt || ''} style={{ maxWidth: '100%' }} {...props} />;
-                                            },
-                                        }}
-                                    >
-                                        {msg.content}
+                                    <ReactMarkdown components={markdownComponents}>
+                                        {getTextFromContent(msg.content)}
                                     </ReactMarkdown>
                                 </div>
                             )}
@@ -423,17 +655,57 @@ export function ChatInterface({ messages, isLoading, onSendMessage }: ChatInterf
             </MessageList>
 
             <InputArea>
+                {/* 첨부 파일 미리보기 */}
+                {attachments.length > 0 && (
+                    <AttachmentPreviewArea>
+                        {attachments.map((att, i) => (
+                            <AttachmentChip key={i}>
+                                {att.type === 'image' && att.preview ? (
+                                    <AttachmentThumb src={att.preview} alt={att.file.name} />
+                                ) : (
+                                    <FileText size={16} color="#5f6368" />
+                                )}
+                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '120px' }}>
+                                    {att.file.name}
+                                </span>
+                                <RemoveAttachButton onClick={() => removeAttachment(i)} type="button">
+                                    <X size={12} />
+                                </RemoveAttachButton>
+                            </AttachmentChip>
+                        ))}
+                    </AttachmentPreviewArea>
+                )}
+
                 <InputWrapper onSubmit={handleSubmit}>
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        multiple
+                        accept={ACCEPT_FILE_TYPES}
+                        style={{ display: 'none' }}
+                        onChange={(e) => {
+                            if (e.target.files) addFiles(e.target.files);
+                            e.target.value = '';
+                        }}
+                    />
+                    <AttachButton
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isLoading}
+                        title="파일 첨부 (이미지, PDF, DOCX, XLSX, CSV, TXT)"
+                    >
+                        <Paperclip size={20} />
+                    </AttachButton>
                     <StyledTextarea
                         ref={textareaRef}
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         onKeyDown={handleKeyDown}
-                        placeholder="여기에 질문을 입력하세요..."
+                        placeholder="여기에 질문을 입력하세요... (파일을 드래그하여 첨부 가능)"
                         disabled={isLoading}
                         rows={1}
                     />
-                    <SendButton type="submit" disabled={!input.trim() || isLoading}>
+                    <SendButton type="submit" disabled={(!input.trim() && attachments.length === 0) || isLoading}>
                         <Send size={20} />
                     </SendButton>
                 </InputWrapper>
