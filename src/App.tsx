@@ -42,10 +42,11 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { ConfirmModal } from './components/ConfirmModal';
 import {
   streamChat, listConversations, createConversation, getMessages, saveMessage, deleteConversation, renameConversation,
-  verifyToken, getUserInfo, AuthError, uploadFile, extractTextContent,
+  verifyToken, getUserInfo, AuthError, TokenLimitError, uploadFile, extractTextContent,
   getStoredJwt, setStoredJwt, clearStoredAuth,
   type Conversation, type Message, type AttachedFile, type ContentPart
 } from './lib/api';
+import { estimateMessagesTokens, estimateTokens, MAX_INPUT_TOKENS } from './lib/tokenEstimator';
 
 // ─── Styled Components ───────────────────────────────────────────────────────
 
@@ -453,7 +454,19 @@ function App() {
     }
 
     // ────────────────────────────────────────────────────────
-    // JWT 검증 통과 → 파일 업로드 + 메시지 구성
+    // JWT 검증 통과 → 토큰 한도 이중 체크
+    // ────────────────────────────────────────────────────────
+    const preCheckTokens = estimateMessagesTokens(messages) + estimateTokens(content) + 10;
+    if (preCheckTokens > MAX_INPUT_TOKENS) {
+      setMessages(prev => [
+        ...prev,
+        { role: 'system', content: `대화가 모델의 최대 컨텍스트 길이(${MAX_INPUT_TOKENS.toLocaleString()} 토큰)를 초과했습니다. 새 대화를 시작해 주세요.` }
+      ]);
+      return;
+    }
+
+    // ────────────────────────────────────────────────────────
+    // 토큰 체크 통과 → 파일 업로드 + 메시지 구성
     // ────────────────────────────────────────────────────────
     setIsLoading(true);
 
@@ -556,6 +569,13 @@ function App() {
         setIsLoading(false);
         if (handleAuthError(error)) {
           setMessages(prev => prev.filter(m => m.content !== ''));
+          return;
+        }
+        if (error instanceof TokenLimitError) {
+          setMessages(prev => [
+            ...prev,
+            { role: 'system', content: error.message }
+          ]);
           return;
         }
         setMessages(prev => [

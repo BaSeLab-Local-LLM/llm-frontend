@@ -108,6 +108,46 @@ export class AuthError extends Error {
     }
 }
 
+// ─── Token Limit Error ───────────────────────────────────────────────────────
+
+/**
+ * 토큰 초과 오류 전용 Error 클래스
+ * vLLM의 400 "maximum context length" 에러를 감지했을 때 사용합니다.
+ */
+export class TokenLimitError extends Error {
+    inputTokens: number;
+    maxTokens: number;
+
+    constructor(inputTokens: number, maxTokens: number) {
+        super(
+            `대화가 모델의 최대 컨텍스트 길이(${maxTokens.toLocaleString()} 토큰)를 초과했습니다. ` +
+            `현재 입력: ${inputTokens.toLocaleString()} 토큰. 새 대화를 시작해 주세요.`
+        );
+        this.name = 'TokenLimitError';
+        this.inputTokens = inputTokens;
+        this.maxTokens = maxTokens;
+    }
+}
+
+/**
+ * 에러 텍스트에서 vLLM의 토큰 초과 에러를 파싱합니다.
+ * 매칭되면 TokenLimitError를 반환하고, 아니면 null을 반환합니다.
+ */
+function parseTokenLimitError(errorText: string): TokenLimitError | null {
+    // vLLM 에러 형식: "This model's maximum context length is 4096 tokens. However, your request has 7616 input tokens."
+    const match = errorText.match(
+        /maximum context length is (\d+) tokens.*?(\d+) input tokens/i
+    );
+    if (match) {
+        return new TokenLimitError(parseInt(match[2], 10), parseInt(match[1], 10));
+    }
+    // "prompt is too long" 형식도 처리
+    if (/prompt.*(too long|exceed)/i.test(errorText) || /context.length/i.test(errorText)) {
+        return new TokenLimitError(0, 4096);
+    }
+    return null;
+}
+
 /** 응답에서 detail 메시지를 추출하고 401/403이면 AuthError를 throw */
 async function throwIfAuthError(response: Response): Promise<void> {
     if (response.status === 401 || response.status === 403) {
@@ -239,6 +279,11 @@ export const streamChat = async (
 
         if (!response.ok) {
             const errorText = await response.text();
+            // 400 에러에서 토큰 초과 여부를 파싱
+            if (response.status === 400) {
+                const tokenError = parseTokenLimitError(errorText);
+                if (tokenError) throw tokenError;
+            }
             throw new Error(`API Error: ${response.status} - ${errorText}`);
         }
 

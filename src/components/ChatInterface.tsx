@@ -1,11 +1,19 @@
 /** @jsxImportSource @emotion/react */
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import styled from '@emotion/styled';
-import { Send, User, Loader2, Sparkles, Copy, Check, Paperclip, X, FileText } from 'lucide-react';
+import { Send, User, Loader2, Sparkles, Copy, Check, Paperclip, X, FileText, AlertTriangle } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import type { Message, AttachedFile, ContentPart } from '../lib/api';
+import {
+    estimateTokens,
+    estimateMessagesTokens,
+    MAX_INPUT_TOKENS,
+    getTokenStatus,
+    getTokenPercent,
+    type TokenStatus,
+} from '../lib/tokenEstimator';
 
 interface ChatInterfaceProps {
     messages: Message[];
@@ -313,6 +321,59 @@ const DragOverlay = styled.div`
   font-weight: 500;
 `;
 
+// ─── 토큰 사용량 바 ─────────────────────────────────────────────────────────
+
+const TOKEN_COLORS: Record<TokenStatus, string> = {
+    safe: '#34a853',
+    warning: '#fbbc04',
+    danger: '#ea4335',
+    over: '#ea4335',
+};
+
+const TokenBarContainer = styled.div`
+  max-width: 800px;
+  margin: 8px auto 0;
+  padding: 0 24px;
+`;
+
+const TokenBarOuter = styled.div`
+  width: 100%;
+  height: 4px;
+  background: #e8eaed;
+  border-radius: 2px;
+  overflow: hidden;
+`;
+
+const TokenBarInner = styled.div<{ percent: number; status: TokenStatus }>`
+  height: 100%;
+  width: ${props => Math.min(props.percent, 100)}%;
+  background: ${props => TOKEN_COLORS[props.status]};
+  border-radius: 2px;
+  transition: width 0.3s ease, background 0.3s ease;
+`;
+
+const TokenInfo = styled.div<{ status: TokenStatus }>`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-size: 11px;
+  color: ${props => props.status === 'over' || props.status === 'danger' ? TOKEN_COLORS[props.status] : '#9aa0a6'};
+`;
+
+const TokenWarning = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: #fce8e6;
+  color: #c5221f;
+  border-radius: 8px;
+  font-size: 13px;
+  max-width: 800px;
+  margin: 8px auto 0;
+`;
+
 const MessageImageContainer = styled.div`
   display: flex;
   flex-wrap: wrap;
@@ -498,6 +559,22 @@ export function ChatInterface({ messages, isLoading, onSendMessage }: ChatInterf
     const fileInputRef = useRef<HTMLInputElement>(null);
     const dragCounter = useRef(0);
 
+    // ─── 토큰 추정 ──────────────────────────────────────────────────────────
+    const existingTokens = useMemo(
+        () => estimateMessagesTokens(messages),
+        [messages]
+    );
+
+    const currentInputTokens = useMemo(
+        () => estimateTokens(input) + (input ? 10 : 0), // 새 메시지의 chat template 오버헤드
+        [input]
+    );
+
+    const totalEstimatedTokens = existingTokens + currentInputTokens;
+    const tokenStatus = getTokenStatus(totalEstimatedTokens);
+    const tokenPercent = getTokenPercent(totalEstimatedTokens);
+    const isOverLimit = tokenStatus === 'over';
+
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     };
@@ -578,7 +655,7 @@ export function ChatInterface({ messages, isLoading, onSendMessage }: ChatInterf
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         const hasContent = input.trim() || attachments.length > 0;
-        if (!hasContent || isLoading) return;
+        if (!hasContent || isLoading || isOverLimit) return;
         onSendMessage(input, attachments.length > 0 ? attachments : undefined);
         setInput('');
         setAttachments([]);
@@ -705,10 +782,34 @@ export function ChatInterface({ messages, isLoading, onSendMessage }: ChatInterf
                         disabled={isLoading}
                         rows={1}
                     />
-                    <SendButton type="submit" disabled={(!input.trim() && attachments.length === 0) || isLoading}>
+                    <SendButton type="submit" disabled={(!input.trim() && attachments.length === 0) || isLoading || isOverLimit}>
                         <Send size={20} />
                     </SendButton>
                 </InputWrapper>
+
+                {/* 토큰 사용량 바 */}
+                {messages.length > 0 && (
+                    <TokenBarContainer>
+                        <TokenBarOuter>
+                            <TokenBarInner percent={tokenPercent} status={tokenStatus} />
+                        </TokenBarOuter>
+                        <TokenInfo status={tokenStatus}>
+                            <span>
+                                {totalEstimatedTokens.toLocaleString()} / {MAX_INPUT_TOKENS.toLocaleString()} 토큰
+                            </span>
+                            <span>{tokenPercent}%</span>
+                        </TokenInfo>
+                    </TokenBarContainer>
+                )}
+
+                {/* 토큰 초과 경고 */}
+                {isOverLimit && (
+                    <TokenWarning>
+                        <AlertTriangle size={16} />
+                        대화가 너무 길어 전송할 수 없습니다. 새 대화를 시작해 주세요.
+                    </TokenWarning>
+                )}
+
                 <p style={{ textAlign: 'center', fontSize: '12px', color: '#70757a', marginTop: '12px' }}>
                     BaSE Lab AI는 실수할 수 있습니다. 중요한 정보는 항상 확인하세요.
                 </p>
