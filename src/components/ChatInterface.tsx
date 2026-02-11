@@ -1,8 +1,10 @@
 /** @jsxImportSource @emotion/react */
 import React, { useState, useEffect, useRef } from 'react';
 import styled from '@emotion/styled';
-import { Send, User, Loader2, Sparkles } from 'lucide-react';
+import { Send, User, Loader2, Sparkles, Copy, Check } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import type { Message } from '../lib/api';
 
 interface ChatInterfaceProps {
@@ -70,8 +72,60 @@ const ContentBox = styled.div<{ isUser: boolean }>`
     overflow-wrap: break-word;
     word-break: break-word;
     p { margin: 8px 0; }
-    code { background: #f1f3f4; padding: 2px 4px; border-radius: 4px; }
-    pre { background: #1e1f20; color: #fff; padding: 16px; border-radius: 12px; overflow-x: auto; word-break: normal; }
+    
+    /* 인라인 코드 */
+    code {
+      background: #f1f3f4;
+      padding: 2px 6px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+      color: #d63384;
+    }
+    
+    /* 코드 블록 wrapper */
+    pre {
+      background: transparent !important;
+      padding: 0 !important;
+      margin: 12px 0;
+      border-radius: 12px;
+      overflow: hidden;
+      word-break: normal;
+    }
+    /* 코드 블록 내부의 code는 인라인 코드 스타일 제거 */
+    pre code {
+      background: none;
+      padding: 0;
+      border-radius: 0;
+      font-size: inherit;
+      color: inherit;
+    }
+    
+    /* 리스트 */
+    ul, ol { margin: 8px 0; padding-left: 24px; }
+    li { margin: 4px 0; }
+    
+    /* 테이블 */
+    table { border-collapse: collapse; margin: 12px 0; width: 100%; }
+    th, td { border: 1px solid #dadce0; padding: 8px 12px; text-align: left; }
+    th { background: #f8f9fa; font-weight: 600; }
+    
+    /* 인용문 */
+    blockquote {
+      border-left: 4px solid #1a73e8;
+      margin: 12px 0;
+      padding: 8px 16px;
+      color: #5f6368;
+      background: #f8f9fa;
+      border-radius: 0 8px 8px 0;
+    }
+    
+    /* 수평선 */
+    hr { border: none; border-top: 1px solid #e8eaed; margin: 16px 0; }
+    
+    /* 강조 */
+    strong { font-weight: 600; }
+    em { font-style: italic; }
   }
 `;
 
@@ -139,6 +193,45 @@ const SendButton = styled.button`
   &:hover:not(:disabled) { transform: scale(1.05); background: #1557b0; }
 `;
 
+const CodeBlockWrapper = styled.div`
+  border-radius: 12px;
+  overflow: hidden;
+  margin: 12px 0;
+  border: 1px solid #2d2d2d;
+`;
+
+const CodeBlockHeader = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: #2d2d2d;
+  border-bottom: 1px solid #3d3d3d;
+`;
+
+const CodeLanguage = styled.span`
+  font-size: 12px;
+  color: #9aa0a6;
+  font-family: 'Fira Code', monospace;
+  text-transform: lowercase;
+`;
+
+const CopyButton = styled.button`
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #9aa0a6;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  
+  &:hover { background: rgba(255,255,255,0.1); color: #fff; }
+`;
+
 const WelcomeScreen = styled.div`
   display: flex;
   flex-direction: column;
@@ -151,6 +244,21 @@ const WelcomeScreen = styled.div`
   h2 { font-size: 32px; font-weight: 500; margin-bottom: 12px; }
   p { color: #70757a; font-size: 16px; }
 `;
+
+// 코드 블록 복사 버튼 컴포넌트
+function CopyCodeButton({ code }: { code: string }) {
+    const [copied, setCopied] = useState(false);
+    const handleCopy = async () => {
+        await navigator.clipboard.writeText(code);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
+    return (
+        <CopyButton onClick={handleCopy}>
+            {copied ? <><Check size={13} /> 복사됨</> : <><Copy size={13} /> 복사</>}
+        </CopyButton>
+    );
+}
 
 export function ChatInterface({ messages, isLoading, onSendMessage }: ChatInterfaceProps) {
     const [input, setInput] = useState('');
@@ -217,7 +325,88 @@ export function ChatInterface({ messages, isLoading, onSendMessage }: ChatInterf
                                 <UserText>{msg.content}</UserText>
                             ) : (
                                 <div className="prose">
-                                    <ReactMarkdown>{msg.content}</ReactMarkdown>
+                                    <ReactMarkdown
+                                        components={{
+                                            // 코드 블록: 구문 강조 + 복사 버튼
+                                            code: ({ className, children, ...props }: { className?: string; children?: React.ReactNode;[key: string]: any }) => {
+                                                const match = /language-(\w+)/.exec(className || '');
+                                                const codeString = String(children).replace(/\n$/, '');
+                                                
+                                                // 코드 블록 (```으로 감싼 경우)
+                                                if (match) {
+                                                    return (
+                                                        <CodeBlockWrapper>
+                                                            <CodeBlockHeader>
+                                                                <CodeLanguage>{match[1]}</CodeLanguage>
+                                                                <CopyCodeButton code={codeString} />
+                                                            </CodeBlockHeader>
+                                                            <SyntaxHighlighter
+                                                                style={oneDark}
+                                                                language={match[1]}
+                                                                PreTag="div"
+                                                                customStyle={{
+                                                                    margin: 0,
+                                                                    borderRadius: 0,
+                                                                    padding: '16px',
+                                                                    fontSize: '14px',
+                                                                    lineHeight: '1.6',
+                                                                }}
+                                                            >
+                                                                {codeString}
+                                                            </SyntaxHighlighter>
+                                                        </CodeBlockWrapper>
+                                                    );
+                                                }
+                                                
+                                                // 언어 지정 없는 코드 블록도 처리
+                                                if (codeString.includes('\n')) {
+                                                    return (
+                                                        <CodeBlockWrapper>
+                                                            <CodeBlockHeader>
+                                                                <CodeLanguage>code</CodeLanguage>
+                                                                <CopyCodeButton code={codeString} />
+                                                            </CodeBlockHeader>
+                                                            <SyntaxHighlighter
+                                                                style={oneDark}
+                                                                language="text"
+                                                                PreTag="div"
+                                                                customStyle={{
+                                                                    margin: 0,
+                                                                    borderRadius: 0,
+                                                                    padding: '16px',
+                                                                    fontSize: '14px',
+                                                                    lineHeight: '1.6',
+                                                                }}
+                                                            >
+                                                                {codeString}
+                                                            </SyntaxHighlighter>
+                                                        </CodeBlockWrapper>
+                                                    );
+                                                }
+                                                
+                                                // 인라인 코드
+                                                return <code className={className} {...props}>{children}</code>;
+                                            },
+                                            // 링크: javascript: 프로토콜 차단, 외부 링크는 새 탭에서 열기
+                                            a: ({ href, children, ...props }: { href?: string; children?: React.ReactNode;[key: string]: any }) => {
+                                                const safeHref = href && (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('/') || href.startsWith('#'))
+                                                    ? href
+                                                    : undefined;
+                                                if (!safeHref) return <span>{children}</span>;
+                                                return <a href={safeHref} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
+                                            },
+                                            // 이미지: 외부 이미지 로드 제한
+                                            img: ({ src, alt, ...props }: { src?: string; alt?: string;[key: string]: any }) => {
+                                                const safeSrc = src && (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('/'))
+                                                    ? src
+                                                    : undefined;
+                                                if (!safeSrc) return <span>[이미지: {alt}]</span>;
+                                                return <img src={safeSrc} alt={alt || ''} style={{ maxWidth: '100%' }} {...props} />;
+                                            },
+                                        }}
+                                    >
+                                        {msg.content}
+                                    </ReactMarkdown>
                                 </div>
                             )}
                         </ContentBox>

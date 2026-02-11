@@ -337,6 +337,7 @@ function App() {
   // 서버에서 검증한 역할과 사용자명 (localStorage에 저장하지 않음)
   const [verifiedRole, setVerifiedRole] = useState<string>('');
   const [username, setUsername] = useState<string>('');
+  const [displayName, setDisplayName] = useState<string>('');
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConvId, setCurrentConvId] = useState<string | null>(null);
@@ -372,6 +373,7 @@ function App() {
       .then(info => {
         setVerifiedRole(info.role);
         setUsername(info.username);
+        setDisplayName(info.display_name || '');
       })
       .catch(err => {
         // 인증 실패 시 경고 없이 조용히 로그아웃 (페이지 로드 시)
@@ -507,7 +509,7 @@ function App() {
         }
         setMessages(prev => [
           ...prev,
-          { role: 'system', content: `Error: ${error.message}` }
+          { role: 'system', content: '응답 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.' }
         ]);
       }
     );
@@ -525,6 +527,7 @@ function App() {
   const performLogout = () => {
     setJwt('');
     setUsername('');
+    setDisplayName('');
     setVerifiedRole('');
     clearStoredAuth();
     setMessages([]);
@@ -742,7 +745,7 @@ function App() {
 
         <SidebarFooter>
           <UserRow>
-            <UserName>{username || '사용자'}</UserName>
+            <UserName>{displayName || username || '사용자'}</UserName>
             {verifiedRole === 'admin' && (
               <FooterIconBtn onClick={() => { if (checkJwtIntegrity()) setIsAdminOpen(true); }} title="관리자 대시보드">
                 <Shield size={18} />

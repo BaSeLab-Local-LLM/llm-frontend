@@ -1,8 +1,12 @@
 /** @jsxImportSource @emotion/react */
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import styled from '@emotion/styled';
-import { X, Shield, LogOut, UserX, UserCheck, RefreshCw, Search, Users, UserCog, AlertCircle, User } from 'lucide-react';
-import { adminListUsers, adminForceLogout, adminToggleActive, AuthError, type AdminUser } from '../lib/api';
+import { X, Shield, LogOut, UserX, UserCheck, RefreshCw, Search, Users, UserCog, AlertCircle, User, Pencil, Clock, Calendar } from 'lucide-react';
+import {
+    adminListUsers, adminForceLogout, adminToggleActive, adminUpdateUser,
+    adminGetSchedules, adminUpdateSchedule, adminGetSystemSettings, adminUpdateSystemSetting,
+    AuthError, type AdminUser, type ScheduleItem, type SystemSettingItem,
+} from '../lib/api';
 import { ConfirmModal } from './ConfirmModal';
 
 interface AdminDashboardProps {
@@ -94,6 +98,38 @@ const IconBtn = styled.button<{ variant?: 'close' }>`
   transition: all 0.15s;
   &:hover { background: ${p => p.variant === 'close' ? '#f1f3f4' : '#f8f9fa'}; color: #1f1f1f; }
   &:disabled { opacity: 0.4; cursor: not-allowed; }
+`;
+
+// ── Tabs ──
+
+const TabBar = styled.div`
+  display: flex;
+  gap: 0;
+  padding: 0 36px;
+  border-bottom: 2px solid #e8eaed;
+  background: #fafbfc;
+  flex-shrink: 0;
+`;
+
+const TabButton = styled.button<{ active: boolean }>`
+  padding: 14px 24px;
+  font-size: 14px;
+  font-weight: 600;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: ${p => p.active ? '#1a73e8' : '#5f6368'};
+  border-bottom: 2.5px solid ${p => p.active ? '#1a73e8' : 'transparent'};
+  margin-bottom: -2px;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  &:hover {
+    color: ${p => p.active ? '#1a73e8' : '#1f1f1f'};
+    background: ${p => p.active ? 'transparent' : '#f1f3f4'};
+  }
 `;
 
 // ── Toolbar ──
@@ -189,7 +225,7 @@ const Thead = styled.thead`
 
 const Th = styled.th`
   text-align: left;
-  padding: 14px 20px;
+  padding: 14px 16px;
   color: #5f6368;
   font-weight: 600;
   font-size: 12px;
@@ -197,10 +233,12 @@ const Th = styled.th`
   letter-spacing: 0.5px;
   border-bottom: 2px solid #e8eaed;
 
-  &:first-of-type { padding-left: 36px; width: 35%; }
-  &:nth-of-type(2) { width: 15%; }
-  &:nth-of-type(3) { width: 15%; }
-  &:last-of-type { padding-right: 36px; text-align: right; width: 35%; }
+  &:first-of-type { padding-left: 36px; width: 18%; }
+  &:nth-of-type(2) { width: 14%; }
+  &:nth-of-type(3) { width: 14%; }
+  &:nth-of-type(4) { width: 10%; }
+  &:nth-of-type(5) { width: 10%; }
+  &:last-of-type { padding-right: 36px; text-align: right; width: 34%; }
 `;
 
 const Tr = styled.tr`
@@ -216,6 +254,61 @@ const Td = styled.td`
 
   &:first-of-type { padding-left: 36px; }
   &:last-of-type { padding-right: 36px; }
+`;
+
+const EditableCell = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+`;
+
+const CellInput = styled.input`
+  width: 100%;
+  padding: 6px 10px;
+  border: 1.5px solid #1a73e8;
+  border-radius: 8px;
+  font-size: 13px;
+  outline: none;
+  background: #fff;
+  color: #1f1f1f;
+
+  &:focus {
+    box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.15);
+  }
+`;
+
+const CellText = styled.span`
+  font-size: 13px;
+  color: #3c4043;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+`;
+
+const CellPlaceholder = styled.span`
+  font-size: 13px;
+  color: #bdc1c6;
+  font-style: italic;
+`;
+
+const CellEditBtn = styled.button`
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px; height: 24px;
+  border: none; border-radius: 6px;
+  background: transparent; cursor: pointer; padding: 0;
+  color: #9aa0a6;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: all 0.15s;
+  
+  &:hover { background: #e8f0fe; color: #1a73e8; }
+`;
+
+const EditableTd = styled(Td)`
+  &:hover ${CellEditBtn} { opacity: 1; }
 `;
 
 const UserCell = styled.div`
@@ -380,20 +473,227 @@ const PanelFooter = styled.div`
   flex-shrink: 0;
 `;
 
-// ─── Component ───────────────────────────────────────────────────────────────
+// ── Schedule UI ──
+
+const ScheduleContainer = styled.div`
+  padding: 28px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+`;
+
+const ScheduleHeader = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  background: #f8f9fa;
+  border-radius: 16px;
+  border: 1px solid #e8eaed;
+`;
+
+const ScheduleToggle = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 16px;
+`;
+
+const ToggleLabel = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+`;
+
+const ToggleLabelMain = styled.span`
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f1f1f;
+`;
+
+const ToggleLabelSub = styled.span`
+  font-size: 13px;
+  color: #9aa0a6;
+`;
+
+const ToggleSwitch = styled.button<{ checked: boolean }>`
+  width: 52px;
+  height: 28px;
+  border-radius: 14px;
+  border: none;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.2s;
+  background: ${p => p.checked ? '#1a73e8' : '#dadce0'};
+  flex-shrink: 0;
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: ${p => p.checked ? '27px' : '3px'};
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    transition: left 0.2s;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+`;
+
+const ScheduleGrid = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+`;
+
+const ScheduleRow = styled.div<{ disabled?: boolean }>`
+  display: grid;
+  grid-template-columns: 80px 1fr 1fr 60px;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 20px;
+  border-radius: 14px;
+  border: 1.5px solid #e8eaed;
+  background: ${p => p.disabled ? '#f8f9fa' : '#fff'};
+  opacity: ${p => p.disabled ? 0.6 : 1};
+  transition: all 0.15s;
+
+  &:hover {
+    border-color: ${p => p.disabled ? '#e8eaed' : '#1a73e8'};
+    box-shadow: ${p => p.disabled ? 'none' : '0 2px 8px rgba(26,115,232,0.08)'};
+  }
+`;
+
+const DayLabel = styled.span<{ today?: boolean }>`
+  font-size: 15px;
+  font-weight: 700;
+  color: ${p => p.today ? '#1a73e8' : '#1f1f1f'};
+  display: flex;
+  align-items: center;
+  gap: 8px;
+`;
+
+const TodayDot = styled.span`
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: #1a73e8;
+`;
+
+const TimeInput = styled.input`
+  padding: 10px 14px;
+  border: 1.5px solid #e8eaed;
+  border-radius: 10px;
+  font-size: 14px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: #1f1f1f;
+  background: #fff;
+  outline: none;
+  transition: all 0.15s;
+  width: 100%;
+  box-sizing: border-box;
+
+  &:focus {
+    border-color: #1a73e8;
+    box-shadow: 0 0 0 3px rgba(26,115,232,0.12);
+  }
+
+  &:disabled {
+    background: #f3f4f6;
+    color: #9aa0a6;
+    cursor: not-allowed;
+  }
+`;
+
+const DayToggle = styled.button<{ active: boolean }>`
+  width: 36px; height: 36px;
+  border-radius: 10px;
+  border: 1.5px solid ${p => p.active ? '#34a853' : '#dadce0'};
+  background: ${p => p.active ? '#e6f4ea' : '#f8f9fa'};
+  color: ${p => p.active ? '#137333' : '#9aa0a6'};
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  transition: all 0.15s;
+
+  &:hover {
+    border-color: ${p => p.active ? '#137333' : '#5f6368'};
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+`;
+
+const Mode24Badge = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 24px;
+  background: #e6f4ea;
+  border: 1px solid #ceead6;
+  border-radius: 14px;
+  color: #137333;
+  font-size: 14px;
+  font-weight: 600;
+`;
+
+const ScheduleNote = styled.div`
+  font-size: 13px;
+  color: #9aa0a6;
+  padding: 0 4px;
+  line-height: 1.5;
+`;
+
+// ─── Constants ───────────────────────────────────────────────────────────
+
+const DAY_NAMES = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일'];
+
+// ─── Component ───────────────────────────────────────────────────────────
+
+type AdminTab = 'users' | 'schedule';
 
 type ConfirmAction =
     | { type: 'forceLogout'; userId: string; username: string }
     | { type: 'toggleActive'; userId: string; username: string; isActive: boolean }
     | null;
 
+type EditState = {
+    userId: string;
+    field: 'display_name' | 'class_name';
+    value: string;
+} | null;
+
 export function AdminDashboard({ isOpen, onClose, jwt }: AdminDashboardProps) {
+    const [activeTab, setActiveTab] = useState<AdminTab>('users');
     const [users, setUsers] = useState<AdminUser[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [accessDenied, setAccessDenied] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
+    const [editState, setEditState] = useState<EditState>(null);
+
+    // Schedule state
+    const [schedules, setSchedules] = useState<ScheduleItem[]>([]);
+    const [systemSettings, setSystemSettings] = useState<SystemSettingItem[]>([]);
+    const [scheduleLoading, setScheduleLoading] = useState(false);
+    const [scheduleUpdating, setScheduleUpdating] = useState<number | null>(null);
+
+    const scheduleEnabled = useMemo(() => {
+        const setting = systemSettings.find(s => s.key === 'schedule_enabled');
+        return setting?.value === 'true';
+    }, [systemSettings]);
+
+    const todayDow = useMemo(() => new Date().getDay(), []);
 
     const fetchUsers = async () => {
         setLoading(true);
@@ -413,12 +713,72 @@ export function AdminDashboard({ isOpen, onClose, jwt }: AdminDashboardProps) {
         }
     };
 
+    const fetchSchedules = useCallback(async () => {
+        setScheduleLoading(true);
+        setError('');
+        try {
+            const [sched, settings] = await Promise.all([
+                adminGetSchedules(jwt),
+                adminGetSystemSettings(jwt),
+            ]);
+            setSchedules(sched);
+            setSystemSettings(settings);
+        } catch (err) {
+            if (err instanceof AuthError && err.status === 403) {
+                setAccessDenied(true);
+            } else {
+                setError(err instanceof Error ? err.message : '스케줄을 불러올 수 없습니다.');
+            }
+        } finally {
+            setScheduleLoading(false);
+        }
+    }, [jwt]);
+
     useEffect(() => {
         if (isOpen && jwt) {
             fetchUsers();
+            fetchSchedules();
             setSearchQuery('');
         }
     }, [isOpen, jwt]);
+
+    // ── Schedule handlers ──
+
+    const handleToggleScheduleEnabled = useCallback(async () => {
+        const newValue = scheduleEnabled ? 'false' : 'true';
+        try {
+            const updated = await adminUpdateSystemSetting(jwt, 'schedule_enabled', newValue);
+            setSystemSettings(prev => prev.map(s => s.key === 'schedule_enabled' ? updated : s));
+        } catch (err) {
+            setError(err instanceof Error ? err.message : '설정 변경에 실패했습니다.');
+        }
+    }, [jwt, scheduleEnabled]);
+
+    const handleScheduleTimeChange = useCallback(async (dayOfWeek: number, field: 'start_time' | 'end_time', value: string) => {
+        setScheduleUpdating(dayOfWeek);
+        try {
+            const updated = await adminUpdateSchedule(jwt, dayOfWeek, { [field]: value });
+            setSchedules(prev => prev.map(s => s.day_of_week === dayOfWeek ? updated : s));
+        } catch (err) {
+            setError(err instanceof Error ? err.message : '스케줄 수정에 실패했습니다.');
+        } finally {
+            setScheduleUpdating(null);
+        }
+    }, [jwt]);
+
+    const handleScheduleDayToggle = useCallback(async (dayOfWeek: number, currentActive: boolean) => {
+        setScheduleUpdating(dayOfWeek);
+        try {
+            const updated = await adminUpdateSchedule(jwt, dayOfWeek, { is_active: !currentActive });
+            setSchedules(prev => prev.map(s => s.day_of_week === dayOfWeek ? updated : s));
+        } catch (err) {
+            setError(err instanceof Error ? err.message : '스케줄 수정에 실패했습니다.');
+        } finally {
+            setScheduleUpdating(null);
+        }
+    }, [jwt]);
+
+    // ── User handlers ──
 
     // 정렬: admin 먼저, 나머지는 숫자(username) 오름차순
     const sortedUsers = useMemo(() => {
@@ -434,11 +794,15 @@ export function AdminDashboard({ isOpen, onClose, jwt }: AdminDashboardProps) {
         });
     }, [users]);
 
-    // 검색 필터링 (username으로만 검색)
+    // 검색 필터링 (username, display_name, class_name으로 검색)
     const filteredUsers = useMemo(() => {
         if (!searchQuery.trim()) return sortedUsers;
         const q = searchQuery.toLowerCase().trim();
-        return sortedUsers.filter(u => u.username.toLowerCase().includes(q));
+        return sortedUsers.filter(u =>
+            u.username.toLowerCase().includes(q) ||
+            (u.display_name && u.display_name.toLowerCase().includes(q)) ||
+            (u.class_name && u.class_name.toLowerCase().includes(q))
+        );
     }, [sortedUsers, searchQuery]);
 
     // 통계
@@ -447,8 +811,34 @@ export function AdminDashboard({ isOpen, onClose, jwt }: AdminDashboardProps) {
         const active = users.filter(u => u.is_active).length;
         const inactive = total - active;
         const admins = users.filter(u => u.role === 'admin').length;
-        return { total, active, inactive, admins };
+        const locked = users.filter(u => !u.is_active && u.failed_login_attempts >= 10).length;
+        return { total, active, inactive, admins, locked };
     }, [users]);
+
+    const startEdit = useCallback((userId: string, field: 'display_name' | 'class_name', currentValue: string | null) => {
+        setEditState({ userId, field, value: currentValue || '' });
+    }, []);
+
+    const submitEdit = useCallback(async () => {
+        if (!editState) return;
+        const { userId, field, value } = editState;
+        setEditState(null);
+        try {
+            const updated = await adminUpdateUser(jwt, userId, { [field]: value });
+            setUsers(prev => prev.map(u => u.id === userId ? { ...u, ...updated } : u));
+        } catch (err) {
+            setError(err instanceof Error ? err.message : '수정에 실패했습니다.');
+        }
+    }, [editState, jwt]);
+
+    const cancelEdit = useCallback(() => {
+        setEditState(null);
+    }, []);
+
+    const handleEditKeyDown = useCallback((e: React.KeyboardEvent) => {
+        if (e.key === 'Enter') { e.preventDefault(); submitEdit(); }
+        else if (e.key === 'Escape') cancelEdit();
+    }, [submitEdit, cancelEdit]);
 
     const handleForceLogout = useCallback((userId: string, username: string) => {
         setConfirmAction({ type: 'forceLogout', userId, username });
@@ -478,6 +868,14 @@ export function AdminDashboard({ isOpen, onClose, jwt }: AdminDashboardProps) {
         }
     }, [confirmAction, jwt]);
 
+    const handleRefresh = useCallback(() => {
+        if (activeTab === 'users') {
+            fetchUsers();
+        } else {
+            fetchSchedules();
+        }
+    }, [activeTab, fetchSchedules]);
+
     if (!isOpen) return null;
 
     return (
@@ -491,8 +889,8 @@ export function AdminDashboard({ isOpen, onClose, jwt }: AdminDashboardProps) {
                         <TitleBadge>Admin</TitleBadge>
                     </PanelTitle>
                     <HeaderActions>
-                        <IconBtn onClick={fetchUsers} disabled={loading} title="새로고침">
-                            <RefreshCw size={18} style={loading ? { animation: 'spin 1s linear infinite' } : undefined} />
+                        <IconBtn onClick={handleRefresh} disabled={loading || scheduleLoading} title="새로고침">
+                            <RefreshCw size={18} style={(loading || scheduleLoading) ? { animation: 'spin 1s linear infinite' } : undefined} />
                         </IconBtn>
                         <IconBtn variant="close" onClick={onClose} title="닫기">
                             <X size={22} />
@@ -500,13 +898,25 @@ export function AdminDashboard({ isOpen, onClose, jwt }: AdminDashboardProps) {
                     </HeaderActions>
                 </PanelHeader>
 
+                {/* ── Tabs ── */}
+                <TabBar>
+                    <TabButton active={activeTab === 'users'} onClick={() => setActiveTab('users')}>
+                        <Users size={16} />
+                        사용자 관리
+                    </TabButton>
+                    <TabButton active={activeTab === 'schedule'} onClick={() => setActiveTab('schedule')}>
+                        <Calendar size={16} />
+                        운영 스케줄
+                    </TabButton>
+                </TabBar>
+
                 {accessDenied ? (
                     <AccessDenied>
                         <Shield size={56} color="#d93025" />
                         <h3>접근 거부</h3>
                         <p>관리자 권한이 필요합니다.</p>
                     </AccessDenied>
-                ) : (
+                ) : activeTab === 'users' ? (
                     <>
                         {/* ── Toolbar: Search + Stats ── */}
                         <Toolbar>
@@ -514,7 +924,7 @@ export function AdminDashboard({ isOpen, onClose, jwt }: AdminDashboardProps) {
                                 <SearchIconWrap><Search size={18} /></SearchIconWrap>
                                 <SearchInput
                                     type="text"
-                                    placeholder="사용자 ID 검색..."
+                                    placeholder="ID, 이름, 수업 검색..."
                                     value={searchQuery}
                                     onChange={e => setSearchQuery(e.target.value)}
                                     autoFocus
@@ -568,6 +978,8 @@ export function AdminDashboard({ isOpen, onClose, jwt }: AdminDashboardProps) {
                                     <Thead>
                                         <tr>
                                             <Th>사용자</Th>
+                                            <Th>이름</Th>
+                                            <Th>수업</Th>
                                             <Th>역할</Th>
                                             <Th>상태</Th>
                                             <Th style={{ textAlign: 'right' }}>관리</Th>
@@ -584,11 +996,61 @@ export function AdminDashboard({ isOpen, onClose, jwt }: AdminDashboardProps) {
                                                         <UserInfo>
                                                             <UserNameText>{user.username}</UserNameText>
                                                             <UserSubText>
-                                                                가입일: {new Date(user.created_at).toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' })}
+                                                                {new Date(user.created_at).toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' })}
                                                             </UserSubText>
                                                         </UserInfo>
                                                     </UserCell>
                                                 </Td>
+                                                <EditableTd>
+                                                    {editState?.userId === user.id && editState.field === 'display_name' ? (
+                                                        <EditableCell>
+                                                            <CellInput
+                                                                autoFocus
+                                                                value={editState.value}
+                                                                onChange={e => setEditState({ ...editState, value: e.target.value })}
+                                                                onKeyDown={handleEditKeyDown}
+                                                                onBlur={submitEdit}
+                                                                maxLength={64}
+                                                                placeholder="이름 입력"
+                                                            />
+                                                        </EditableCell>
+                                                    ) : (
+                                                        <EditableCell>
+                                                            {user.display_name
+                                                                ? <CellText>{user.display_name}</CellText>
+                                                                : <CellPlaceholder>미설정</CellPlaceholder>
+                                                            }
+                                                            <CellEditBtn onClick={() => startEdit(user.id, 'display_name', user.display_name)} title="이름 수정">
+                                                                <Pencil size={12} />
+                                                            </CellEditBtn>
+                                                        </EditableCell>
+                                                    )}
+                                                </EditableTd>
+                                                <EditableTd>
+                                                    {editState?.userId === user.id && editState.field === 'class_name' ? (
+                                                        <EditableCell>
+                                                            <CellInput
+                                                                autoFocus
+                                                                value={editState.value}
+                                                                onChange={e => setEditState({ ...editState, value: e.target.value })}
+                                                                onKeyDown={handleEditKeyDown}
+                                                                onBlur={submitEdit}
+                                                                maxLength={64}
+                                                                placeholder="수업 입력"
+                                                            />
+                                                        </EditableCell>
+                                                    ) : (
+                                                        <EditableCell>
+                                                            {user.class_name
+                                                                ? <CellText>{user.class_name}</CellText>
+                                                                : <CellPlaceholder>미설정</CellPlaceholder>
+                                                            }
+                                                            <CellEditBtn onClick={() => startEdit(user.id, 'class_name', user.class_name)} title="수업 수정">
+                                                                <Pencil size={12} />
+                                                            </CellEditBtn>
+                                                        </EditableCell>
+                                                    )}
+                                                </EditableTd>
                                                 <Td>
                                                     <RoleBadge isAdmin={user.role === 'admin'}>
                                                         {user.role === 'admin' ? '관리자' : '학생'}
@@ -596,7 +1058,12 @@ export function AdminDashboard({ isOpen, onClose, jwt }: AdminDashboardProps) {
                                                 </Td>
                                                 <Td>
                                                     <StatusBadge active={user.is_active}>
-                                                        {user.is_active ? '활성' : '비활성'}
+                                                        {user.is_active
+                                                            ? '활성'
+                                                            : user.failed_login_attempts >= 10
+                                                                ? '잠김'
+                                                                : '비활성'
+                                                        }
                                                     </StatusBadge>
                                                 </Td>
                                                 <Td style={{ textAlign: 'right' }}>
@@ -644,6 +1111,109 @@ export function AdminDashboard({ isOpen, onClose, jwt }: AdminDashboardProps) {
                             </span>
                         </PanelFooter>
                     </>
+                ) : (
+                    /* ══════════════ Schedule Tab ══════════════ */
+                    <>
+                        {/* ── Error ── */}
+                        {error && (
+                            <ErrorBanner>
+                                <AlertCircle size={18} />
+                                {error}
+                            </ErrorBanner>
+                        )}
+
+                        <PanelBody>
+                            {scheduleLoading ? (
+                                <EmptyState>
+                                    <RefreshCw size={36} color="#dadce0" style={{ animation: 'spin 1s linear infinite' }} />
+                                    <p style={{ marginTop: 20, fontSize: 15 }}>스케줄을 불러오는 중...</p>
+                                </EmptyState>
+                            ) : (
+                                <ScheduleContainer>
+                                    {/* ── Toggle: schedule_enabled ── */}
+                                    <ScheduleHeader>
+                                        <ScheduleToggle>
+                                            <Clock size={22} color="#1a73e8" />
+                                            <ToggleLabel>
+                                                <ToggleLabelMain>운영 스케줄 모드</ToggleLabelMain>
+                                                <ToggleLabelSub>
+                                                    {scheduleEnabled
+                                                        ? '요일별 운영 시간에 따라 LLM 서비스가 제한됩니다.'
+                                                        : '스케줄이 비활성화되어 24시간 운영 중입니다.'}
+                                                </ToggleLabelSub>
+                                            </ToggleLabel>
+                                        </ScheduleToggle>
+                                        <ToggleSwitch
+                                            checked={scheduleEnabled}
+                                            onClick={handleToggleScheduleEnabled}
+                                            title={scheduleEnabled ? '스케줄 비활성화 (24시간 운영)' : '스케줄 활성화'}
+                                        />
+                                    </ScheduleHeader>
+
+                                    {!scheduleEnabled && (
+                                        <Mode24Badge>
+                                            <Clock size={18} />
+                                            24시간 운영 모드 — 스케줄에 관계없이 LLM 서비스가 항상 이용 가능합니다.
+                                        </Mode24Badge>
+                                    )}
+
+                                    {/* ── 7-day grid ── */}
+                                    <ScheduleGrid>
+                                        {schedules.map(sched => {
+                                            const isToday = sched.day_of_week === todayDow;
+                                            const isUpdating = scheduleUpdating === sched.day_of_week;
+                                            const isDisabledRow = !scheduleEnabled || !sched.is_active;
+
+                                            return (
+                                                <ScheduleRow key={sched.day_of_week} disabled={!scheduleEnabled}>
+                                                    <DayLabel today={isToday}>
+                                                        {isToday && <TodayDot />}
+                                                        {DAY_NAMES[sched.day_of_week]}
+                                                    </DayLabel>
+                                                    <TimeInput
+                                                        type="time"
+                                                        value={sched.start_time}
+                                                        disabled={isDisabledRow || isUpdating}
+                                                        onChange={e => handleScheduleTimeChange(sched.day_of_week, 'start_time', e.target.value)}
+                                                    />
+                                                    <TimeInput
+                                                        type="time"
+                                                        value={sched.end_time}
+                                                        disabled={isDisabledRow || isUpdating}
+                                                        onChange={e => handleScheduleTimeChange(sched.day_of_week, 'end_time', e.target.value)}
+                                                    />
+                                                    <DayToggle
+                                                        active={sched.is_active}
+                                                        disabled={!scheduleEnabled || isUpdating}
+                                                        onClick={() => handleScheduleDayToggle(sched.day_of_week, sched.is_active)}
+                                                        title={sched.is_active ? '이 요일 비활성화' : '이 요일 활성화'}
+                                                    >
+                                                        {sched.is_active ? 'ON' : 'OFF'}
+                                                    </DayToggle>
+                                                </ScheduleRow>
+                                            );
+                                        })}
+                                    </ScheduleGrid>
+
+                                    <ScheduleNote>
+                                        * 스케줄 모드가 활성화되면, 각 요일의 설정된 시간 내에서만 LLM 서비스를 이용할 수 있습니다.<br />
+                                        * 요일별 ON/OFF 토글로 특정 요일의 운영을 중단할 수 있습니다.<br />
+                                        * 시간 변경은 즉시 적용됩니다.
+                                    </ScheduleNote>
+                                </ScheduleContainer>
+                            )}
+                        </PanelBody>
+
+                        <PanelFooter>
+                            <span>
+                                운영 모드: {scheduleEnabled ? '스케줄 기반' : '24시간 운영'}
+                            </span>
+                            <span>
+                                <Calendar size={13} style={{ verticalAlign: 'middle', marginRight: 5 }} />
+                                활성 요일 {schedules.filter(s => s.is_active).length}일 / 7일
+                            </span>
+                        </PanelFooter>
+                    </>
                 )}
             </Panel>
 
@@ -687,7 +1257,7 @@ export function AdminDashboard({ isOpen, onClose, jwt }: AdminDashboardProps) {
                         ? '모든 기기에서 즉시 로그아웃됩니다.'
                         : confirmAction?.type === 'toggleActive' && confirmAction.isActive
                             ? '비활성화된 사용자는 로그인할 수 없습니다.'
-                            : undefined
+                            : '활성화하면 로그인 실패 횟수가 초기화되고 다시 로그인할 수 있습니다.'
                 }
                 confirmText={
                     confirmAction?.type === 'forceLogout'

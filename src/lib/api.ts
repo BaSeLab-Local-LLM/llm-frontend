@@ -104,6 +104,8 @@ export interface UserInfo {
     username: string;
     role: string;
     is_active: boolean;
+    display_name: string | null;
+    class_name: string | null;
 }
 
 export const getUserInfo = async (jwt: string): Promise<UserInfo> => {
@@ -287,6 +289,9 @@ export interface AdminUser {
     username: string;
     role: string;
     is_active: boolean;
+    failed_login_attempts: number;
+    display_name: string | null;
+    class_name: string | null;
     daily_token_limit: number | null;
     token_version: number;
     created_at: string;
@@ -311,5 +316,72 @@ export const adminToggleActive = async (jwt: string, userId: string): Promise<{ 
         method: 'POST',
     });
     if (!res.ok) throw new Error(`Failed to toggle user: ${res.status}`);
+    return res.json();
+};
+
+export const adminUpdateUser = async (
+    jwt: string,
+    userId: string,
+    data: { display_name?: string; class_name?: string }
+): Promise<AdminUser> => {
+    const res = await apiFetch(`/api/v1/users/admin/${userId}`, jwt, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error(`Failed to update user: ${res.status}`);
+    return res.json();
+};
+
+// ─── Admin: Operation Schedules ──────────────────────────────────────────────
+
+export interface ScheduleItem {
+    id: number;
+    day_of_week: number;    // 0=일, 1=월, ..., 6=토
+    start_time: string;     // "HH:MM"
+    end_time: string;       // "HH:MM"
+    is_active: boolean;
+}
+
+export interface SystemSettingItem {
+    key: string;
+    value: string;
+    description: string | null;
+}
+
+export const adminGetSchedules = async (jwt: string): Promise<ScheduleItem[]> => {
+    const res = await apiFetch('/api/v1/settings/schedules', jwt);
+    if (!res.ok) throw new Error(`Failed to fetch schedules: ${res.status}`);
+    return res.json();
+};
+
+export const adminUpdateSchedule = async (
+    jwt: string,
+    dayOfWeek: number,
+    data: { start_time?: string; end_time?: string; is_active?: boolean }
+): Promise<ScheduleItem> => {
+    const res = await apiFetch(`/api/v1/settings/schedules/${dayOfWeek}`, jwt, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error(`Failed to update schedule: ${res.status}`);
+    return res.json();
+};
+
+export const adminGetSystemSettings = async (jwt: string): Promise<SystemSettingItem[]> => {
+    const res = await apiFetch('/api/v1/settings/system', jwt);
+    if (!res.ok) throw new Error(`Failed to fetch system settings: ${res.status}`);
+    return res.json();
+};
+
+export const adminUpdateSystemSetting = async (
+    jwt: string,
+    key: string,
+    value: string
+): Promise<SystemSettingItem> => {
+    const res = await apiFetch(`/api/v1/settings/system/${key}`, jwt, {
+        method: 'PUT',
+        body: JSON.stringify({ value }),
+    });
+    if (!res.ok) throw new Error(`Failed to update system setting: ${res.status}`);
     return res.json();
 };

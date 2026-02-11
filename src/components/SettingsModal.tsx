@@ -306,10 +306,13 @@ export function SettingsModal({ isOpen, onClose, jwt, username, onJwtUpdate }: S
                             </UserIdIcon>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                                 <span style={{ fontSize: 14, fontWeight: 600, color: '#1f1f1f' }}>
-                                    {userInfo?.username || username}
+                                    {userInfo?.display_name
+                                        ? `${userInfo.display_name} (${userInfo?.username || username})`
+                                        : (userInfo?.username || username)}
                                 </span>
                                 <span style={{ fontSize: 12, color: '#9aa0a6' }}>
-                                    {userInfo?.role === 'admin' ? '관리자' : '학생'} · 변경 불가
+                                    {userInfo?.role === 'admin' ? '관리자' : '학생'}
+                                    {userInfo?.class_name ? ` · ${userInfo.class_name}` : ''}
                                 </span>
                             </div>
                         </UserIdBox>
