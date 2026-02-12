@@ -122,7 +122,7 @@ export function estimateTokens(text: string): number {
 
 // ─── ContentPart → 토큰 추정 ────────────────────────────────────────────────
 
-function estimateContentPartTokens(part: ContentPart): number {
+export function estimateContentPartTokens(part: ContentPart): number {
     if (part.type === 'text') {
         return estimateTokens(part.text);
     }

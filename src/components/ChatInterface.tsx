@@ -453,6 +453,89 @@ function isImageType(mime: string) {
     return mime.startsWith('image/');
 }
 
+// ─── 문서 첨부 카드 컴포넌트 ──────────────────────────────────────────────
+
+const DocumentCard = styled.div`
+  background: #f0f4f9;
+  border: 1px solid #d3dbe6;
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin: 6px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #3c4043;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+  &:hover { background: #e4eaf2; }
+`;
+
+const DocumentCardIcon = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #dbe4f0;
+  flex-shrink: 0;
+`;
+
+const DocumentCardName = styled.span`
+  font-weight: 500;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+`;
+
+const DocumentPreviewBox = styled.pre`
+  background: #f5f7fa;
+  border: 1px solid #d3dbe6;
+  border-radius: 8px;
+  padding: 12px;
+  margin: 4px 0 6px;
+  font-size: 12px;
+  color: #5f6368;
+  max-height: 300px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+`;
+
+/** 문서 텍스트 파트인지 판별 (예: "[문서: file.pdf]\n...") */
+function parseDocumentPart(text: string): { filename: string; body: string } | null {
+    const match = text.match(/^\[문서:\s*(.+?)\]\n([\s\S]*)$/);
+    if (!match) return null;
+    return { filename: match[1], body: match[2] };
+}
+
+function DocumentAttachment({ filename, body }: { filename: string; body: string }) {
+    const [expanded, setExpanded] = React.useState(false);
+    const previewLength = 500;
+    const isLong = body.length > previewLength;
+
+    return (
+        <div>
+            <DocumentCard onClick={() => setExpanded(prev => !prev)}>
+                <DocumentCardIcon><FileText size={16} color="#5f6368" /></DocumentCardIcon>
+                <DocumentCardName>{filename}</DocumentCardName>
+                <span style={{ fontSize: 12, color: '#8e918f', flexShrink: 0 }}>
+                    {expanded ? '접기 ▲' : '펼치기 ▼'}
+                </span>
+            </DocumentCard>
+            {expanded && (
+                <DocumentPreviewBox>
+                    {isLong && !expanded ? body.slice(0, previewLength) + '...' : body}
+                </DocumentPreviewBox>
+            )}
+        </div>
+    );
+}
+
 // ─── 멀티모달 메시지 content 렌더링 헬퍼 ────────────────────────────────────
 
 function renderMultimodalContent(content: string | ContentPart[]) {
@@ -463,6 +546,11 @@ function renderMultimodalContent(content: string | ContentPart[]) {
         <div>
             {content.map((part, i) => {
                 if (part.type === 'text') {
+                    // 문서 텍스트 파트는 접을 수 있는 카드로 표시
+                    const doc = parseDocumentPart(part.text);
+                    if (doc) {
+                        return <DocumentAttachment key={i} filename={doc.filename} body={doc.body} />;
+                    }
                     return <UserText key={i}>{part.text}</UserText>;
                 }
                 if (part.type === 'image_url') {
@@ -832,7 +920,7 @@ export function ChatInterface({ messages, isLoading, onSendMessage, onStopGenera
                 </InputWrapper>
 
                 {/* 토큰 사용량 바 */}
-                {messages.length > 0 && (
+                {(messages.length > 0 || input.trim()) && (
                     <TokenBarContainer>
                         <TokenBarOuter>
                             <TokenBarInner percent={tokenPercent} status={tokenStatus} />

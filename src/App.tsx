@@ -46,7 +46,7 @@ import {
   getStoredJwt, setStoredJwt, clearStoredAuth,
   type Conversation, type Message, type AttachedFile, type ContentPart
 } from './lib/api';
-import { estimateMessagesTokens, estimateTokens, getMaxInputTokens, fetchTokenConfig } from './lib/tokenEstimator';
+import { estimateMessagesTokens, estimateTokens, estimateContentPartTokens, getMaxInputTokens, fetchTokenConfig } from './lib/tokenEstimator';
 
 // ─── Styled Components ───────────────────────────────────────────────────────
 
@@ -520,6 +520,20 @@ function App() {
         }
 
         messageContent = contentParts;
+
+        // ── 파일 포함 토큰 재검사 ──
+        const fileTokens = contentParts.reduce(
+          (sum, part) => sum + estimateContentPartTokens(part), 0
+        );
+        const postUploadTokens = estimateMessagesTokens(messages) + fileTokens + 10;
+        if (postUploadTokens > maxInput) {
+          setIsLoading(false);
+          setMessages(prev => [
+            ...prev,
+            { role: 'system', content: `첨부 파일 포함 시 모델의 최대 컨텍스트 길이(${maxInput.toLocaleString()} 토큰)를 초과합니다. 파일 크기를 줄이거나 새 대화를 시작해 주세요. (추정: ${postUploadTokens.toLocaleString()} 토큰)` }
+          ]);
+          return;
+        }
       } catch (err) {
         console.error('File upload failed:', err);
         setIsLoading(false);
