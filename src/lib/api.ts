@@ -249,7 +249,8 @@ export const streamChat = async (
     jwt: string,
     onChunk: (chunk: string) => void,
     onFinish: () => void,
-    onError: (error: Error) => void
+    onError: (error: Error) => void,
+    signal?: AbortSignal
 ) => {
     try {
         const response = await fetch('/api/v1/chat/completions', {
@@ -265,7 +266,8 @@ export const streamChat = async (
                 stream: true,
                 temperature: 0.7,
                 top_p: 0.8
-            })
+            }),
+            signal,
         });
 
         if (response.status === 401 || response.status === 403) {
@@ -322,6 +324,11 @@ export const streamChat = async (
 
         onFinish();
     } catch (err) {
+        // AbortController에 의한 중단은 에러가 아닌 정상 종료로 처리
+        if (err instanceof DOMException && err.name === 'AbortError') {
+            onFinish();
+            return;
+        }
         onError(err instanceof Error ? err : new Error('Unknown error'));
     }
 };

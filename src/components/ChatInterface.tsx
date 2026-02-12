@@ -1,7 +1,7 @@
 /** @jsxImportSource @emotion/react */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import styled from '@emotion/styled';
-import { Send, User, Loader2, Sparkles, Copy, Check, Paperclip, X, FileText, AlertTriangle } from 'lucide-react';
+import { Send, Square, User, Loader2, Sparkles, Copy, Check, Paperclip, X, FileText, AlertTriangle } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -19,6 +19,7 @@ interface ChatInterfaceProps {
     messages: Message[];
     isLoading: boolean;
     onSendMessage: (content: string, attachments?: AttachedFile[]) => void;
+    onStopGeneration: () => void;
 }
 
 
@@ -199,6 +200,21 @@ const SendButton = styled.button`
   transition: transform 0.2s;
   &:disabled { background: #e9eef6; color: #8e918f; cursor: not-allowed; }
   &:hover:not(:disabled) { transform: scale(1.05); background: #1557b0; }
+`;
+
+const StopButton = styled.button`
+  background: #dc2626;
+  color: white;
+  border: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.2s;
+  &:hover { transform: scale(1.05); background: #b91c1c; }
 `;
 
 const CodeBlockWrapper = styled.div`
@@ -550,14 +566,16 @@ const markdownComponents = {
     },
 };
 
-export function ChatInterface({ messages, isLoading, onSendMessage }: ChatInterfaceProps) {
+export function ChatInterface({ messages, isLoading, onSendMessage, onStopGeneration }: ChatInterfaceProps) {
     const [input, setInput] = useState('');
     const [attachments, setAttachments] = useState<AttachedFile[]>([]);
     const [isDragging, setIsDragging] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const messageListRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const dragCounter = useRef(0);
+    const isUserNearBottom = useRef(true);
 
     // ─── 토큰 추정 ──────────────────────────────────────────────────────────
     const existingTokens = useMemo(
@@ -579,8 +597,21 @@ export function ChatInterface({ messages, isLoading, onSendMessage }: ChatInterf
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     };
 
+    // 사용자가 스크롤 위치를 변경할 때 하단 근처인지 감지
+    const handleScroll = () => {
+        const el = messageListRef.current;
+        if (!el) return;
+        // 하단에서 150px 이내이면 "하단 근처"로 판단
+        const threshold = 150;
+        isUserNearBottom.current =
+            el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    };
+
     useEffect(() => {
-        scrollToBottom();
+        // 사용자가 하단 근처에 있을 때만 자동 스크롤
+        if (isUserNearBottom.current) {
+            scrollToBottom();
+        }
     }, [messages]);
 
     // textarea 높이 자동 조절
@@ -659,6 +690,8 @@ export function ChatInterface({ messages, isLoading, onSendMessage }: ChatInterf
         onSendMessage(input, attachments.length > 0 ? attachments : undefined);
         setInput('');
         setAttachments([]);
+        // 메시지 전송 시 하단으로 스크롤 복귀
+        isUserNearBottom.current = true;
         if (textareaRef.current) {
             textareaRef.current.style.height = 'auto';
         }
@@ -691,7 +724,7 @@ export function ChatInterface({ messages, isLoading, onSendMessage }: ChatInterf
                 <DragOverlay>파일을 여기에 놓으세요</DragOverlay>
             )}
 
-            <MessageList>
+            <MessageList ref={messageListRef} onScroll={handleScroll}>
                 {messages.length === 0 && (
                     <WelcomeScreen>
                         <Sparkles size={48} color="#1a73e8" style={{ marginBottom: '24px' }} />
@@ -782,9 +815,15 @@ export function ChatInterface({ messages, isLoading, onSendMessage }: ChatInterf
                         disabled={isLoading}
                         rows={1}
                     />
-                    <SendButton type="submit" disabled={(!input.trim() && attachments.length === 0) || isLoading || isOverLimit}>
-                        <Send size={20} />
-                    </SendButton>
+                    {isLoading ? (
+                        <StopButton type="button" onClick={onStopGeneration} title="응답 생성 중단">
+                            <Square size={18} fill="currentColor" />
+                        </StopButton>
+                    ) : (
+                        <SendButton type="submit" disabled={(!input.trim() && attachments.length === 0) || isOverLimit}>
+                            <Send size={20} />
+                        </SendButton>
+                    )}
                 </InputWrapper>
 
                 {/* 토큰 사용량 바 */}

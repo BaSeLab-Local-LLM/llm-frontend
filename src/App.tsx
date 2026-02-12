@@ -348,6 +348,7 @@ function App() {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // 보안 경고 메시지
   const [authWarning, setAuthWarning] = useState<string | null>(null);
@@ -474,6 +475,13 @@ function App() {
     // ────────────────────────────────────────────────────────
     // 토큰 체크 통과 → 파일 업로드 + 메시지 구성
     // ────────────────────────────────────────────────────────
+    // 이전 스트리밍이 있으면 중단
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
     setIsLoading(true);
 
     // 첨부파일이 있으면 서버에 업로드하고 멀티모달 content 구성
@@ -566,13 +574,15 @@ function App() {
       },
       () => {
         setIsLoading(false);
-        if (convId) {
+        abortControllerRef.current = null;
+        if (convId && assistantMessage) {
           saveMessage(jwt, convId, 'assistant', assistantMessage).catch(console.error);
         }
       },
       (error) => {
         console.error(error);
         setIsLoading(false);
+        abortControllerRef.current = null;
         if (handleAuthError(error)) {
           setMessages(prev => prev.filter(m => m.content !== ''));
           return;
@@ -588,8 +598,17 @@ function App() {
           ...prev,
           { role: 'system', content: '응답 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.' }
         ]);
-      }
+      },
+      abortController.signal
     );
+  };
+
+  // ── 스트리밍 중단 ──
+  const handleStopGeneration = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
   };
 
   // ── 로그인 ──
@@ -854,6 +873,7 @@ function App() {
             messages={messages}
             isLoading={isLoading}
             onSendMessage={handleSendMessage}
+            onStopGeneration={handleStopGeneration}
           />
         </main>
       </MainContent>
