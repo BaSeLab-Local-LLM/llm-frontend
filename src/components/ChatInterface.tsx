@@ -9,7 +9,7 @@ import type { Message, AttachedFile, ContentPart } from '../lib/api';
 import {
     estimateTokens,
     estimateMessagesTokens,
-    MAX_INPUT_TOKENS,
+    getMaxInputTokens,
     getTokenStatus,
     getTokenPercent,
     type TokenStatus,
@@ -795,7 +795,7 @@ export function ChatInterface({ messages, isLoading, onSendMessage }: ChatInterf
                         </TokenBarOuter>
                         <TokenInfo status={tokenStatus}>
                             <span>
-                                {totalEstimatedTokens.toLocaleString()} / {MAX_INPUT_TOKENS.toLocaleString()} 토큰
+                                {totalEstimatedTokens.toLocaleString()} / {getMaxInputTokens().toLocaleString()} 토큰
                             </span>
                             <span>{tokenPercent}%</span>
                         </TokenInfo>

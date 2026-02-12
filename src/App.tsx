@@ -46,7 +46,7 @@ import {
   getStoredJwt, setStoredJwt, clearStoredAuth,
   type Conversation, type Message, type AttachedFile, type ContentPart
 } from './lib/api';
-import { estimateMessagesTokens, estimateTokens, MAX_INPUT_TOKENS } from './lib/tokenEstimator';
+import { estimateMessagesTokens, estimateTokens, getMaxInputTokens, fetchTokenConfig } from './lib/tokenEstimator';
 
 // ─── Styled Components ───────────────────────────────────────────────────────
 
@@ -367,6 +367,11 @@ function App() {
     localStorage.removeItem('llm_role');
   }, []);
 
+  // ── 서버에서 토큰 설정 로드 ──
+  useEffect(() => {
+    fetchTokenConfig();
+  }, []);
+
   // ── JWT 유효성 검증 및 사용자 정보 로드 ──
   useEffect(() => {
     if (!jwt) return;
@@ -456,11 +461,12 @@ function App() {
     // ────────────────────────────────────────────────────────
     // JWT 검증 통과 → 토큰 한도 이중 체크
     // ────────────────────────────────────────────────────────
+    const maxInput = getMaxInputTokens();
     const preCheckTokens = estimateMessagesTokens(messages) + estimateTokens(content) + 10;
-    if (preCheckTokens > MAX_INPUT_TOKENS) {
+    if (preCheckTokens > maxInput) {
       setMessages(prev => [
         ...prev,
-        { role: 'system', content: `대화가 모델의 최대 컨텍스트 길이(${MAX_INPUT_TOKENS.toLocaleString()} 토큰)를 초과했습니다. 새 대화를 시작해 주세요.` }
+        { role: 'system', content: `대화가 모델의 최대 컨텍스트 길이(${maxInput.toLocaleString()} 토큰)를 초과했습니다. 새 대화를 시작해 주세요.` }
       ]);
       return;
     }

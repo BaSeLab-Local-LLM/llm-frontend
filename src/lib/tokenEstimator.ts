@@ -4,19 +4,65 @@
  * Qwen 토크나이저 특성에 맞춰 대략적인 토큰 수를 추정합니다.
  * 정확한 값이 아닌 보수적(과대 추정) 근사치이며,
  * vLLM의 400 에러를 사전에 방지하는 용도입니다.
+ *
+ * 서버에서 실제 max_model_len을 가져와 동적으로 설정합니다.
  */
 import type { Message, ContentPart } from './api';
 
-// ─── 상수 ────────────────────────────────────────────────────────────────────
+// ─── 동적 설정 (서버에서 로드) ───────────────────────────────────────────────
 
-/** vLLM max_model_len (환경변수 VLLM_MAX_MODEL_LEN과 동일하게 유지) */
-export const MAX_MODEL_LEN = 4096;
+/** 기본값 (서버에서 가져오기 전까지 사용) */
+const DEFAULT_MAX_MODEL_LEN = 4096;
+const DEFAULT_RESERVED_OUTPUT_TOKENS = 512;
 
-/** 모델 응답 생성용 예약 토큰 */
-export const RESERVED_OUTPUT_TOKENS = 512;
+/** 모듈 상태 — fetchTokenConfig()가 호출되면 업데이트됨 */
+let _maxModelLen = DEFAULT_MAX_MODEL_LEN;
+let _reservedOutputTokens = DEFAULT_RESERVED_OUTPUT_TOKENS;
+let _maxInputTokens = _maxModelLen - _reservedOutputTokens;
+let _configLoaded = false;
 
-/** 프론트엔드가 허용하는 최대 입력 토큰 */
-export const MAX_INPUT_TOKENS = MAX_MODEL_LEN - RESERVED_OUTPUT_TOKENS; // 3584
+/**
+ * 서버에서 토큰 설정을 가져와 모듈 상태를 업데이트합니다.
+ * App 마운트 시 한 번 호출하면 됩니다.
+ */
+export async function fetchTokenConfig(): Promise<void> {
+    if (_configLoaded) return;
+    try {
+        const res = await fetch('/api/v1/config');
+        if (res.ok) {
+            const data = await res.json();
+            _maxModelLen = data.max_model_len ?? DEFAULT_MAX_MODEL_LEN;
+            _reservedOutputTokens = data.reserved_output_tokens ?? DEFAULT_RESERVED_OUTPUT_TOKENS;
+            _maxInputTokens = data.max_input_tokens ?? (_maxModelLen - _reservedOutputTokens);
+            _configLoaded = true;
+        }
+    } catch {
+        // 네트워크 실패 시 기본값 유지
+        console.warn('[tokenEstimator] Failed to fetch config, using defaults');
+    }
+}
+
+/** 현재 설정된 max_model_len */
+export function getMaxModelLen(): number {
+    return _maxModelLen;
+}
+
+/** 현재 설정된 최대 입력 토큰 */
+export function getMaxInputTokens(): number {
+    return _maxInputTokens;
+}
+
+/** 설정이 로드되었는지 여부 */
+export function isConfigLoaded(): boolean {
+    return _configLoaded;
+}
+
+// ─── 하위 호환용 상수 (로컬 개발 / import 편의) ─────────────────────────────
+// 주의: 이 값들은 기본값이며, 실제 런타임에서는 get* 함수를 사용하세요.
+
+export const MAX_MODEL_LEN = DEFAULT_MAX_MODEL_LEN;
+export const RESERVED_OUTPUT_TOKENS = DEFAULT_RESERVED_OUTPUT_TOKENS;
+export const MAX_INPUT_TOKENS = DEFAULT_MAX_MODEL_LEN - DEFAULT_RESERVED_OUTPUT_TOKENS;
 
 /**
  * 메시지 하나당 chat template 오버헤드 (토큰)
@@ -118,9 +164,11 @@ export type TokenStatus = 'safe' | 'warning' | 'danger' | 'over';
 
 /**
  * 현재 토큰 사용량의 상태를 반환합니다.
+ * 동적 설정값(getMaxInputTokens)을 사용합니다.
  */
 export function getTokenStatus(estimatedTokens: number): TokenStatus {
-    const ratio = estimatedTokens / MAX_INPUT_TOKENS;
+    const limit = _maxInputTokens;
+    const ratio = estimatedTokens / limit;
     if (ratio > 1) return 'over';
     if (ratio > 0.9) return 'danger';
     if (ratio > 0.7) return 'warning';
@@ -129,7 +177,9 @@ export function getTokenStatus(estimatedTokens: number): TokenStatus {
 
 /**
  * 사용률 퍼센트 (0~100+)
+ * 동적 설정값(getMaxInputTokens)을 사용합니다.
  */
 export function getTokenPercent(estimatedTokens: number): number {
-    return Math.round((estimatedTokens / MAX_INPUT_TOKENS) * 100);
+    const limit = _maxInputTokens;
+    return Math.round((estimatedTokens / limit) * 100);
 }
