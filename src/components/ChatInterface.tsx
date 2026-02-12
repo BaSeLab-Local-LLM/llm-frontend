@@ -461,15 +461,11 @@ const DocumentCard = styled.div`
   border-radius: 10px;
   padding: 10px 14px;
   margin: 6px 0;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 10px;
   font-size: 13px;
   color: #3c4043;
-  cursor: pointer;
-  user-select: none;
-  transition: background 0.15s;
-  &:hover { background: #e4eaf2; }
 `;
 
 const DocumentCardIcon = styled.div`
@@ -485,55 +481,16 @@ const DocumentCardIcon = styled.div`
 
 const DocumentCardName = styled.span`
   font-weight: 500;
-  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 `;
 
-const DocumentPreviewBox = styled.pre`
-  background: #f5f7fa;
-  border: 1px solid #d3dbe6;
-  border-radius: 8px;
-  padding: 12px;
-  margin: 4px 0 6px;
-  font-size: 12px;
-  color: #5f6368;
-  max-height: 300px;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-  line-height: 1.5;
-`;
-
 /** 문서 텍스트 파트인지 판별 (예: "[문서: file.pdf]\n...") */
-function parseDocumentPart(text: string): { filename: string; body: string } | null {
-    const match = text.match(/^\[문서:\s*(.+?)\]\n([\s\S]*)$/);
+function parseDocumentPart(text: string): { filename: string } | null {
+    const match = text.match(/^\[문서:\s*(.+?)\]\n/);
     if (!match) return null;
-    return { filename: match[1], body: match[2] };
-}
-
-function DocumentAttachment({ filename, body }: { filename: string; body: string }) {
-    const [expanded, setExpanded] = React.useState(false);
-    const previewLength = 500;
-    const isLong = body.length > previewLength;
-
-    return (
-        <div>
-            <DocumentCard onClick={() => setExpanded(prev => !prev)}>
-                <DocumentCardIcon><FileText size={16} color="#5f6368" /></DocumentCardIcon>
-                <DocumentCardName>{filename}</DocumentCardName>
-                <span style={{ fontSize: 12, color: '#8e918f', flexShrink: 0 }}>
-                    {expanded ? '접기 ▲' : '펼치기 ▼'}
-                </span>
-            </DocumentCard>
-            {expanded && (
-                <DocumentPreviewBox>
-                    {isLong && !expanded ? body.slice(0, previewLength) + '...' : body}
-                </DocumentPreviewBox>
-            )}
-        </div>
-    );
+    return { filename: match[1] };
 }
 
 // ─── 멀티모달 메시지 content 렌더링 헬퍼 ────────────────────────────────────
@@ -542,30 +499,52 @@ function renderMultimodalContent(content: string | ContentPart[]) {
     if (typeof content === 'string') {
         return <UserText>{content}</UserText>;
     }
+
+    // 문서 카드와 사용자 텍스트를 분리
+    const textParts: React.ReactNode[] = [];
+    const fileParts: React.ReactNode[] = [];
+    const imageParts: React.ReactNode[] = [];
+
+    content.forEach((part, i) => {
+        if (part.type === 'text') {
+            const doc = parseDocumentPart(part.text);
+            if (doc) {
+                // 문서 파트 → 파일명 카드만 표시 (내용 숨김)
+                fileParts.push(
+                    <DocumentCard key={`doc-${i}`}>
+                        <DocumentCardIcon><FileText size={16} color="#5f6368" /></DocumentCardIcon>
+                        <DocumentCardName>{doc.filename}</DocumentCardName>
+                    </DocumentCard>
+                );
+            } else {
+                // 일반 텍스트 파트
+                textParts.push(<UserText key={`txt-${i}`}>{part.text}</UserText>);
+            }
+        } else if (part.type === 'image_url') {
+            imageParts.push(
+                <MessageImageContainer key={`img-${i}`}>
+                    <MessageImage
+                        src={part.image_url.url}
+                        alt="첨부 이미지"
+                        onClick={() => window.open(part.image_url.url, '_blank')}
+                    />
+                </MessageImageContainer>
+            );
+        }
+    });
+
     return (
         <div>
-            {content.map((part, i) => {
-                if (part.type === 'text') {
-                    // 문서 텍스트 파트는 접을 수 있는 카드로 표시
-                    const doc = parseDocumentPart(part.text);
-                    if (doc) {
-                        return <DocumentAttachment key={i} filename={doc.filename} body={doc.body} />;
-                    }
-                    return <UserText key={i}>{part.text}</UserText>;
-                }
-                if (part.type === 'image_url') {
-                    return (
-                        <MessageImageContainer key={i}>
-                            <MessageImage
-                                src={part.image_url.url}
-                                alt="첨부 이미지"
-                                onClick={() => window.open(part.image_url.url, '_blank')}
-                            />
-                        </MessageImageContainer>
-                    );
-                }
-                return null;
-            })}
+            {/* 첨부 파일 카드 (상단) */}
+            {fileParts.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: textParts.length > 0 || imageParts.length > 0 ? '8px' : '0' }}>
+                    {fileParts}
+                </div>
+            )}
+            {/* 첨부 이미지 */}
+            {imageParts}
+            {/* 사용자 텍스트 */}
+            {textParts}
         </div>
     );
 }
@@ -681,7 +660,25 @@ export function ChatInterface({ messages, isLoading, onSendMessage, onStopGenera
         [input]
     );
 
-    const totalEstimatedTokens = existingTokens + currentInputTokens;
+    // 첨부 파일의 추정 토큰 (파일 크기 기반)
+    const attachmentTokens = useMemo(() => {
+        if (attachments.length === 0) return 0;
+        return attachments.reduce((sum, att) => {
+            if (att.type === 'image') return sum + 1225; // 이미지: 고정 토큰
+            // 문서: 파일 크기 기반 추정 (텍스트 추출률 고려)
+            const size = att.file.size;
+            const mime = att.file.type;
+            if (mime === 'text/plain' || mime === 'text/csv') {
+                return sum + Math.ceil(size / 3);       // TXT/CSV: ~3 bytes per token
+            }
+            if (mime === 'application/pdf') {
+                return sum + Math.ceil(size / 5);       // PDF: ~5 bytes per token
+            }
+            return sum + Math.ceil(size / 8);           // DOCX/XLSX: ~8 bytes per token
+        }, 0);
+    }, [attachments]);
+
+    const totalEstimatedTokens = existingTokens + currentInputTokens + attachmentTokens;
     const tokenStatus = getTokenStatus(totalEstimatedTokens);
     const tokenPercent = getTokenPercent(totalEstimatedTokens);
     const isOverLimit = tokenStatus === 'over';
@@ -920,7 +917,7 @@ export function ChatInterface({ messages, isLoading, onSendMessage, onStopGenera
                 </InputWrapper>
 
                 {/* 토큰 사용량 바 */}
-                {(messages.length > 0 || input.trim()) && (
+                {(messages.length > 0 || input.trim() || attachments.length > 0) && (
                     <TokenBarContainer>
                         <TokenBarOuter>
                             <TokenBarInner percent={tokenPercent} status={tokenStatus} />
