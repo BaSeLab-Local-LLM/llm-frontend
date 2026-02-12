@@ -97,6 +97,7 @@ const NewChatBtn = styled.button`
 `;
 
 const LogoSection = styled.div`
+  user-select: none;
   padding: 16px 12px;
   font-size: 20px;
   font-weight: 700;
@@ -121,6 +122,7 @@ const UserRow = styled.div`
   gap: 10px;
   padding: 10px 12px;
   border-radius: 12px;
+  user-select: none;
 `;
 
 const UserName = styled.span`
@@ -207,6 +209,7 @@ const Header = styled.header`
   background-color: rgba(255, 255, 255, 0.8);
   backdrop-filter: blur(8px);
   z-index: 10;
+  user-select: none;
 `;
 
 // ─── Security Warning Modal ──────────────────────────────────────────────────

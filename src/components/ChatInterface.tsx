@@ -159,6 +159,9 @@ const InputWrapper = styled.form`
   padding: 8px 12px 8px 24px;
   transition: all 0.2s ease;
   box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  display: flex;
+  align-items: center;
+  cursor: pointer;
 
   &:focus-within {
     background: #ffffff;
@@ -180,6 +183,7 @@ const StyledTextarea = styled.textarea`
   line-height: 1.5;
   max-height: 200px;
   overflow-y: auto;
+  margin-left: 8px;
   &::placeholder { color: #70757a; }
 
   &::-webkit-scrollbar { width: 4px; }
@@ -415,9 +419,10 @@ const WelcomeScreen = styled.div`
   height: 100%;
   color: #1f1f1f;
   text-align: center;
+  user-select: none;
   
   h2 { font-size: 32px; font-weight: 500; margin-bottom: 12px; }
-  p { color: #70757a; font-size: 16px; }
+  p { color: #70757a; font-size: 16px; 
 `;
 
 // 코드 블록 복사 버튼 컴포넌트
