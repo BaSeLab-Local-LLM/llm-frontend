@@ -3,7 +3,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "http://163.239.27.193/api/:path*"
+      "destination": "https://rosia-pitiable-perla.ngrok-free.dev/api/:path*"
     }
   ]
 }
