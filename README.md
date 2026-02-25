@@ -1,73 +1,33 @@
-# React + TypeScript + Vite
+# Frontend (Vite + React)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This frontend is designed to call backend APIs via relative paths (`/api/...`) and
+send auth cookies with `credentials: "same-origin"`.
 
-Currently, two official plugins are available:
+## Deploy Frontend Only on Vercel
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+Use this directory (`submodules/frontend`) as the Vercel project root.
 
-## React Compiler
+1. Import the repo in Vercel.
+2. Set Root Directory to `submodules/frontend`.
+3. Build command: `npm run build`
+4. Output directory: `dist`
+5. Keep `vercel.json` rewrite so `/api/*` is proxied to your backend.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Why Rewrite Is Required
 
-## Expanding the ESLint configuration
+Auth uses JWT + HttpOnly fingerprint cookie (`path=/api`), so requests should stay
+same-origin from the browser perspective. The Vercel rewrite preserves current behavior
+without changing frontend API code.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Backend Settings For Vercel Frontend
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+- Set `ALLOWED_ORIGINS` to your Vercel/custom frontend domains.
+- Use HTTPS in production and set `COOKIE_SECURE=true` (or `auto` with `DEBUG=false`).
+- Ensure backend endpoint in `vercel.json` is publicly reachable by Vercel.
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+## Local Development
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
-
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev
 ```
