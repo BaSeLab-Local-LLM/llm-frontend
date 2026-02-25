@@ -6,6 +6,7 @@ import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import type { Message, AttachedFile, ContentPart } from '../lib/api';
+import { uploadFile } from '../lib/api';
 import {
     estimateTokens,
     estimateMessagesTokens,
@@ -18,6 +19,7 @@ import {
 interface ChatInterfaceProps {
     messages: Message[];
     isLoading: boolean;
+    jwt: string | null;
     onSendMessage: (content: string, attachments?: AttachedFile[]) => void;
     onStopGeneration: () => void;
 }
@@ -290,7 +292,7 @@ const AttachmentPreviewArea = styled.div`
 const AttachmentChip = styled.div`
   position: relative;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   padding: 6px 10px;
   background: #e8eef7;
@@ -298,6 +300,7 @@ const AttachmentChip = styled.div`
   font-size: 13px;
   color: #1f1f1f;
   max-width: 200px;
+  min-width: 0;
 `;
 
 const AttachmentThumb = styled.img`
@@ -440,7 +443,7 @@ function CopyCodeButton({ code }: { code: string }) {
     );
 }
 
-// ─── 허용 파일 타입 ──────────────────────────────────────────────────────────
+// ─── 허용 파일 타입 및 크기 제한 ──────────────────────────────────────────────
 const ACCEPT_FILE_TYPES = [
     'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp',
     'application/pdf',
@@ -449,8 +452,17 @@ const ACCEPT_FILE_TYPES = [
     'text/csv', 'text/plain',
 ].join(',');
 
+/** 파일당 최대 크기 (15MB) - 업로드 전 경고 */
+const MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024;
+
 function isImageType(mime: string) {
     return mime.startsWith('image/');
+}
+
+function formatFileSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 // ─── 문서 첨부 카드 컴포넌트 ──────────────────────────────────────────────
@@ -466,6 +478,7 @@ const DocumentCard = styled.div`
   gap: 10px;
   font-size: 13px;
   color: #3c4043;
+  max-width: min(320px, 100%);
 `;
 
 const DocumentCardIcon = styled.div`
@@ -481,9 +494,10 @@ const DocumentCardIcon = styled.div`
 
 const DocumentCardName = styled.span`
   font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  word-break: break-word;
 `;
 
 /** 문서 텍스트 파트인지 판별 (예: "[문서: file.pdf]\n...") */
@@ -638,7 +652,7 @@ const markdownComponents = {
     },
 };
 
-export function ChatInterface({ messages, isLoading, onSendMessage, onStopGeneration }: ChatInterfaceProps) {
+export function ChatInterface({ messages, isLoading, jwt, onSendMessage, onStopGeneration }: ChatInterfaceProps) {
     const [input, setInput] = useState('');
     const [attachments, setAttachments] = useState<AttachedFile[]>([]);
     const [isDragging, setIsDragging] = useState(false);
@@ -648,33 +662,40 @@ export function ChatInterface({ messages, isLoading, onSendMessage, onStopGenera
     const fileInputRef = useRef<HTMLInputElement>(null);
     const dragCounter = useRef(0);
     const isUserNearBottom = useRef(true);
+    const scrollLastRun = useRef(0);
 
-    // ─── 토큰 추정 ──────────────────────────────────────────────────────────
+    // ─── 토큰 추정 (입력 디바운스로 타이핑 시 CPU 부하 감소) ───────────────────
+    const [debouncedInput, setDebouncedInput] = useState('');
+    useEffect(() => {
+        const t = setTimeout(() => setDebouncedInput(input), 150);
+        return () => clearTimeout(t);
+    }, [input]);
+
     const existingTokens = useMemo(
         () => estimateMessagesTokens(messages),
         [messages]
     );
 
     const currentInputTokens = useMemo(
-        () => estimateTokens(input) + (input ? 10 : 0), // 새 메시지의 chat template 오버헤드
-        [input]
+        () => estimateTokens(debouncedInput) + (debouncedInput ? 10 : 0), // 새 메시지의 chat template 오버헤드
+        [debouncedInput]
     );
 
-    // 첨부 파일의 추정 토큰 (파일 크기 기반)
+    // 첨부 파일의 추정 토큰: 문서는 업로드 후 추출된 텍스트 기준(실제 사용 토큰), 미업로드 시에만 파일 크기 추정
     const attachmentTokens = useMemo(() => {
         if (attachments.length === 0) return 0;
         return attachments.reduce((sum, att) => {
             if (att.type === 'image') return sum + 1225; // 이미지: 고정 토큰
-            // 문서: 파일 크기 기반 추정 (텍스트 추출률 고려)
+            // 문서: 업로드 완료 시 서버가 추출한 텍스트로 실제 사용 토큰 계산
+            if (att.type === 'document' && att.result?.content != null) {
+                return sum + estimateTokens(att.result.content);
+            }
+            // 미업로드 문서: 파일 크기 기반 추정(임시)
             const size = att.file.size;
             const mime = att.file.type;
-            if (mime === 'text/plain' || mime === 'text/csv') {
-                return sum + Math.ceil(size / 3);       // TXT/CSV: ~3 bytes per token
-            }
-            if (mime === 'application/pdf') {
-                return sum + Math.ceil(size / 5);       // PDF: ~5 bytes per token
-            }
-            return sum + Math.ceil(size / 8);           // DOCX/XLSX: ~8 bytes per token
+            if (mime === 'text/plain' || mime === 'text/csv') return sum + Math.ceil(size / 3);
+            if (mime === 'application/pdf') return sum + Math.ceil(size / 20);
+            return sum + Math.ceil(size / 12);
         }, 0);
     }, [attachments]);
 
@@ -687,15 +708,17 @@ export function ChatInterface({ messages, isLoading, onSendMessage, onStopGenera
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     };
 
-    // 사용자가 스크롤 위치를 변경할 때 하단 근처인지 감지
-    const handleScroll = () => {
+    // 사용자가 스크롤 위치를 변경할 때 하단 근처인지 감지 (100ms throttle)
+    const handleScroll = useCallback(() => {
         const el = messageListRef.current;
         if (!el) return;
-        // 하단에서 150px 이내이면 "하단 근처"로 판단
+        const now = Date.now();
+        if (now - scrollLastRun.current < 100) return;
+        scrollLastRun.current = now;
         const threshold = 150;
         isUserNearBottom.current =
             el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-    };
+    }, []);
 
     useEffect(() => {
         // 사용자가 하단 근처에 있을 때만 자동 스크롤
@@ -716,19 +739,62 @@ export function ChatInterface({ messages, isLoading, onSendMessage, onStopGenera
         adjustTextareaHeight();
     }, [input]);
 
+    // ─── 파일 크기 초과 경고 ─────────────────────────────────────────────────
+    const [fileRejectMessage, setFileRejectMessage] = useState<string | null>(null);
+
     // ─── 파일 추가 ──────────────────────────────────────────────────────────
     const addFiles = useCallback((files: FileList | File[]) => {
-        const newAttachments: AttachedFile[] = Array.from(files).map(file => {
-            const isImage = isImageType(file.type);
-            return {
-                file,
-                preview: isImage ? URL.createObjectURL(file) : undefined,
-                type: isImage ? 'image' : 'document',
-                status: 'pending' as const,
-            };
-        });
-        setAttachments(prev => [...prev, ...newAttachments]);
-    }, []);
+        const fileArray = Array.from(files);
+        const valid: AttachedFile[] = [];
+        const rejected: { name: string; size: number }[] = [];
+
+        for (const file of fileArray) {
+            if (file.size > MAX_FILE_SIZE_BYTES) {
+                rejected.push({ name: file.name, size: file.size });
+            } else {
+                const isImage = isImageType(file.type);
+                const isDocument = !isImage;
+                valid.push({
+                    file,
+                    preview: isImage ? URL.createObjectURL(file) : undefined,
+                    type: isImage ? 'image' : 'document',
+                    status: isDocument && jwt ? 'uploading' : 'pending',
+                });
+            }
+        }
+
+        setAttachments(prev => [...prev, ...valid]);
+
+        // 문서는 첨부 시 미리 업로드 → 추출 텍스트로 실제 사용 토큰 계산
+        if (jwt) {
+            valid.filter(a => a.type === 'document').forEach(att => {
+                uploadFile(att.file, jwt)
+                    .then(result => {
+                        setAttachments(prev =>
+                            prev.map(a => (a.file === att.file && a.type === 'document' ? { ...a, status: 'done' as const, result } : a))
+                        );
+                    })
+                    .catch(() => {
+                        setAttachments(prev =>
+                            prev.map(a => (a.file === att.file && a.type === 'document' ? { ...a, status: 'error' as const } : a))
+                        );
+                    });
+            });
+        }
+
+        if (rejected.length > 0) {
+            const maxMb = (MAX_FILE_SIZE_BYTES / (1024 * 1024)).toFixed(0);
+            const names = rejected.map(r => `"${r.name}" (${formatFileSize(r.size)})`).join(', ');
+            setFileRejectMessage(
+                `${rejected.length}개 파일이 제한(${maxMb}MB)을 초과해 제외됨: ${names}`
+            );
+            setTimeout(() => setFileRejectMessage(null), 6000);
+        }
+
+        if (valid.length > 0) {
+            setFileRejectMessage(null);
+        }
+    }, [jwt]);
 
     const removeAttachment = useCallback((index: number) => {
         setAttachments(prev => {
@@ -855,6 +921,12 @@ export function ChatInterface({ messages, isLoading, onSendMessage, onStopGenera
             </MessageList>
 
             <InputArea>
+                {/* 파일 크기 초과 경고 */}
+                {fileRejectMessage && (
+                    <div className="max-w-[800px] mx-auto px-6 py-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg">
+                        {fileRejectMessage}
+                    </div>
+                )}
                 {/* 첨부 파일 미리보기 */}
                 {attachments.length > 0 && (
                     <AttachmentPreviewArea>
@@ -865,8 +937,14 @@ export function ChatInterface({ messages, isLoading, onSendMessage, onStopGenera
                                 ) : (
                                     <FileText size={16} color="#5f6368" />
                                 )}
-                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '120px' }}>
+                                <span className="min-w-0 max-w-[130px] break-words text-left">
                                     {att.file.name}
+                                    {att.type === 'document' && att.status === 'uploading' && (
+                                        <span style={{ fontSize: 10, color: '#70757a', marginLeft: 4 }}>처리 중</span>
+                                    )}
+                                    {att.type === 'document' && att.status === 'error' && (
+                                        <span style={{ fontSize: 10, color: '#d93025', marginLeft: 4 }}>오류</span>
+                                    )}
                                 </span>
                                 <RemoveAttachButton onClick={() => removeAttachment(i)} type="button">
                                     <X size={12} />
@@ -928,6 +1006,11 @@ export function ChatInterface({ messages, isLoading, onSendMessage, onStopGenera
                             </span>
                             <span>{tokenPercent}%</span>
                         </TokenInfo>
+                        {attachments.some(a => a.type === 'document' && !a.result) && (
+                            <p style={{ fontSize: '11px', color: '#70757a', marginTop: '4px', marginBottom: 0 }}>
+                                문서 처리 중이면 추출된 텍스트 기준으로 토큰이 반영됩니다.
+                            </p>
+                        )}
                     </TokenBarContainer>
                 )}
 

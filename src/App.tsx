@@ -352,6 +352,8 @@ function App() {
   const [renameValue, setRenameValue] = useState('');
   const renameInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  /** getMessages 캐시 (대화 전환 시 API 호출 최소화) */
+  const messagesCacheRef = useRef<Map<string, Message[]>>(new Map());
 
   // 보안 경고 메시지
   const [authWarning, setAuthWarning] = useState<string | null>(null);
@@ -493,9 +495,11 @@ function App() {
       try {
         const contentParts: ContentPart[] = [];
 
-        // 파일 업로드 (병렬)
+        // 파일 업로드 (이미 첨부 시 업로드된 문서는 result 재사용, 나머지만 업로드)
         const uploadResults = await Promise.all(
-          attachments.map(att => uploadFile(att.file, jwt))
+          attachments.map(att =>
+            att.result ? Promise.resolve(att.result) : uploadFile(att.file, jwt)
+          )
         );
 
         // 이미지 → image_url content part
@@ -551,7 +555,19 @@ function App() {
     setMessages(updatedMessages);
 
     let assistantMessage = '';
+    let lastFlushAt = 0;
+    const STREAM_FLUSH_MS = 60;
+
     setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
+
+    const flushToState = () => {
+      setMessages(prev => {
+        const next = [...prev];
+        next[next.length - 1] = { role: 'assistant', content: assistantMessage };
+        return next;
+      });
+      lastFlushAt = Date.now();
+    };
 
     let convId = currentConvId;
     if (!convId) {
@@ -580,20 +596,20 @@ function App() {
       jwt,
       (chunk) => {
         assistantMessage += chunk;
-        setMessages(prev => {
-          const newMessages = [...prev];
-          newMessages[newMessages.length - 1] = {
-            role: 'assistant',
-            content: assistantMessage
-          };
-          return newMessages;
-        });
+        const now = Date.now();
+        if (now - lastFlushAt >= STREAM_FLUSH_MS) {
+          flushToState();
+        }
       },
       () => {
+        flushToState(); // 최종 스트리밍 내용 반영
         setIsLoading(false);
         abortControllerRef.current = null;
-        if (convId && assistantMessage) {
-          saveMessage(jwt, convId, 'assistant', assistantMessage).catch(console.error);
+        if (convId) {
+          messagesCacheRef.current.delete(convId); // 새 메시지 반영을 위해 캐시 무효화
+          if (assistantMessage) {
+            saveMessage(jwt, convId, 'assistant', assistantMessage).catch(console.error);
+          }
         }
       },
       (error) => {
@@ -676,6 +692,7 @@ function App() {
     } else if (action.type === 'deleteConversation') {
       try {
         await deleteConversation(jwt, action.id);
+        messagesCacheRef.current.delete(action.id);
         setConversations(prev => prev.filter(c => c.id !== action.id));
         if (currentConvId === action.id) {
           setCurrentConvId(null);
@@ -727,12 +744,18 @@ function App() {
     if (renamingId) return; // 이름 변경 중에는 선택 방지
     if (!checkJwtIntegrity()) return;
     setCurrentConvId(id);
+    const cached = messagesCacheRef.current.get(id);
+    if (cached) {
+      setMessages(cached);
+      return;
+    }
     try {
       const msgs = await getMessages(jwt, id);
       const formatted: Message[] = msgs.map(m => ({
         role: m.role as 'user' | 'assistant' | 'system',
         content: m.content
       }));
+      messagesCacheRef.current.set(id, formatted);
       setMessages(formatted);
     } catch (e) {
       console.error(e);
@@ -889,6 +912,7 @@ function App() {
           <ChatInterface
             messages={messages}
             isLoading={isLoading}
+            jwt={jwt}
             onSendMessage={handleSendMessage}
             onStopGeneration={handleStopGeneration}
           />

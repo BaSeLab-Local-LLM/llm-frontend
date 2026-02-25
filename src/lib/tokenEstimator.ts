@@ -21,25 +21,69 @@ let _reservedOutputTokens = DEFAULT_RESERVED_OUTPUT_TOKENS;
 let _maxInputTokens = _maxModelLen - _reservedOutputTokens;
 let _configLoaded = false;
 
+/** 요청 디듀플리케이션: 동시 마운트 시 단일 요청만 발생 */
+let _fetchPromise: Promise<void> | null = null;
+
+const CONFIG_CACHE_KEY = 'llm_token_config_cache';
+const CONFIG_CACHE_TTL_MS = 5 * 60 * 1000; // 5분
+
+function applyConfigFromData(data: { max_model_len?: number; max_input_tokens?: number; reserved_output_tokens?: number }) {
+    _maxModelLen = data.max_model_len ?? DEFAULT_MAX_MODEL_LEN;
+    _reservedOutputTokens = data.reserved_output_tokens ?? DEFAULT_RESERVED_OUTPUT_TOKENS;
+    _maxInputTokens = data.max_input_tokens ?? (_maxModelLen - _reservedOutputTokens);
+    _configLoaded = true;
+}
+
 /**
  * 서버에서 토큰 설정을 가져와 모듈 상태를 업데이트합니다.
- * App 마운트 시 한 번 호출하면 됩니다.
+ * sessionStorage 캐시(5분 TTL) + 요청 디듀플리케이션으로 동시 접속 시 API 호출 최소화.
  */
 export async function fetchTokenConfig(): Promise<void> {
     if (_configLoaded) return;
+
+    // 1) sessionStorage 캐시 확인 (탭/새로고침 간 공유)
     try {
-        const res = await fetch('/api/v1/config');
-        if (res.ok) {
-            const data = await res.json();
-            _maxModelLen = data.max_model_len ?? DEFAULT_MAX_MODEL_LEN;
-            _reservedOutputTokens = data.reserved_output_tokens ?? DEFAULT_RESERVED_OUTPUT_TOKENS;
-            _maxInputTokens = data.max_input_tokens ?? (_maxModelLen - _reservedOutputTokens);
-            _configLoaded = true;
+        const cached = sessionStorage.getItem(CONFIG_CACHE_KEY);
+        if (cached) {
+            const { data, exp } = JSON.parse(cached) as { data: Parameters<typeof applyConfigFromData>[0]; exp: number };
+            if (Date.now() < exp) {
+                applyConfigFromData(data);
+                return;
+            }
         }
     } catch {
-        // 네트워크 실패 시 기본값 유지
-        console.warn('[tokenEstimator] Failed to fetch config, using defaults');
+        /* 캐시 파싱 실패 시 무시하고 서버 요청 */
     }
+
+    // 2) 인플라이트 요청 재사용 (동시 마운트 시 1회만 호출)
+    if (!_fetchPromise) {
+        _fetchPromise = (async () => {
+            try {
+                const res = await fetch('/api/v1/config');
+                if (res.ok) {
+                    const data = await res.json();
+                    applyConfigFromData(data);
+                    try {
+                        sessionStorage.setItem(CONFIG_CACHE_KEY, JSON.stringify({
+                            data: {
+                                max_model_len: _maxModelLen,
+                                reserved_output_tokens: _reservedOutputTokens,
+                                max_input_tokens: _maxInputTokens,
+                            },
+                            exp: Date.now() + CONFIG_CACHE_TTL_MS,
+                        }));
+                    } catch {
+                        /* sessionStorage 실패 시 무시 */
+                    }
+                }
+            } catch {
+                console.warn('[tokenEstimator] Failed to fetch config, using defaults');
+            } finally {
+                _fetchPromise = null;
+            }
+        })();
+    }
+    await _fetchPromise;
 }
 
 /** 현재 설정된 max_model_len */

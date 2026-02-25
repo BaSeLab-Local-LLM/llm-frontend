@@ -190,11 +190,20 @@ export function clearStoredAuth(): void {
 
 // ─── JWT Pre-flight 검증 ─────────────────────────────────────────────────────
 
+/** verifyToken 결과 캐시 (동시 접속 시 /auth/verify 호출 최소화) */
+const verifyCache = new Map<string, number>();
+const VERIFY_CACHE_TTL_MS = 90 * 1000; // 90초
+
 /**
  * LLM 프롬프트 전송 전 JWT 토큰 사전 검증.
  * 변조/만료된 토큰이면 AuthError를 throw합니다.
+ * TTL 90초 캐시로 메시지 전송 시 검증 요청 수 감소.
  */
 export const verifyToken = async (jwt: string): Promise<void> => {
+    const now = Date.now();
+    const cached = verifyCache.get(jwt);
+    if (cached != null && now < cached) return;
+
     const response = await fetch('/api/v1/auth/verify', {
         method: 'GET',
         headers: {
@@ -206,6 +215,7 @@ export const verifyToken = async (jwt: string): Promise<void> => {
     if (!response.ok) {
         throw new Error(`Token verification failed: ${response.status}`);
     }
+    verifyCache.set(jwt, now + VERIFY_CACHE_TTL_MS);
 };
 
 // ─── API Fetch Helper ────────────────────────────────────────────────────────
